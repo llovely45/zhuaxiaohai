@@ -48,7 +48,7 @@ const groups: ChatGroup[] = [
         sender: "小板凳",
         avatar: "板",
         tone: "pink",
-        text: "[不当索要] 又有人有能用的代理节点吗？没有就别装懂。",
+        text: "又有人有能用的代理节点吗？没有就别装懂。",
         time: "09:43",
         reportable: true,
       },
@@ -270,7 +270,7 @@ export default function Home() {
           avatar: "安",
           tone: "bot",
           isBot: true,
-          text: "暂未能处理。请在“纸片闲聊群”引用标有“不当索要”的消息后再提交。",
+          text: "暂未能处理。请在“纸片闲聊群”引用反复索要代理节点并攻击群友的消息后再提交。",
           time: "刚刚",
         });
       }
@@ -342,6 +342,11 @@ export default function Home() {
                     <PlaneMark />
                   </span>
                   <small>TeleChat</small>
+                  <span className="tap-hand" aria-hidden="true">
+                    <i className="tap-ring" />
+                    <i className="hand-finger" />
+                    <i className="hand-palm" />
+                  </span>
                 </button>
                 <div className="app-tile">
                   <span className="app-icon note-icon">⌑</span>
@@ -378,11 +383,6 @@ export default function Home() {
                 <span>开始游戏</span>
                 <b>→</b>
               </button>
-              <div className="tap-hand" aria-hidden="true">
-                <i className="tap-ring" />
-                <i className="hand-finger" />
-                <i className="hand-palm" />
-              </div>
             </div>
           </div>
         </section>
@@ -459,7 +459,7 @@ export default function Home() {
               {activeGroup.id === "night-watch" && !isBanned && (
                 <div className="mission-tip">
                   <span>!</span>
-                  <p>点按带有“不当索要”标签的消息，引用后发送 <b>/spaw</b>。</p>
+                  <p>找出反复索要代理节点并攻击群友的发言，点按引用后发送 <b>/spaw</b>。</p>
                 </div>
               )}
 
@@ -470,7 +470,7 @@ export default function Home() {
                   const isSelected = quotedId === message.id;
                   return (
                     <article
-                      className={`message-row${isSelf ? " self" : ""}${message.isBot ? " bot-row" : ""}${message.reportable ? " reportable" : ""}`}
+                      className={`message-row${isSelf ? " self" : ""}${message.isBot ? " bot-row" : ""}`}
                       key={message.id}
                     >
                       {!isSelf && <span className={`message-avatar ${message.tone}`}>{message.avatar}</span>}
@@ -482,11 +482,9 @@ export default function Home() {
                           disabled={!message.reportable}
                           aria-label={message.reportable ? "引用这条不当消息" : undefined}
                         >
-                          {message.reportable && <span className="evidence-tag">不当索要</span>}
                           <span>{message.text}</span>
                           <small>{message.time}</small>
                         </button>
-                        {message.reportable && <span className="quote-hint">{isSelected ? "已引用 ✓" : "点按引用"}</span>}
                       </div>
                     </article>
                   );
