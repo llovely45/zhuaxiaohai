@@ -303,7 +303,6 @@ export default function Home() {
             <h1>抓小孩</h1>
             <blockquote className="home-description meme-quote">
               <p>“咱 TG 群里五万多群友，爷们娘们，能不能走个面儿？走个面儿把第一波流量先带起来，咱就有了！”</p>
-              <footer>网络热梗改编 · 非官方</footer>
             </blockquote>
             <div className="home-tags" aria-label="游戏特点">
               <span>竖屏对话游戏</span>
@@ -311,9 +310,8 @@ export default function Home() {
             </div>
           </div>
 
-          <figure className="hanhong-cutout" aria-label="二次元韩红纸片人，网络热梗致敬">
+          <figure className="hanhong-cutout" aria-label="二次元韩红纸片人">
             <img src="/hanhong-paper.png" alt="手持麦克风和手机的二次元韩红纸片人" />
-            <figcaption>热梗致敬 · 非官方形象</figcaption>
           </figure>
 
           <div className={`phone-frame${view === "handoff" ? " handoff" : ""}`}>

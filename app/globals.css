@@ -65,12 +65,10 @@ button { -webkit-tap-highlight-color: transparent; }
 .meme-quote { position: relative; padding: 22px 23px 18px; border: 2px solid #fff; border-radius: 22px 22px 22px 6px; background: #fff9fbd9; box-shadow: 7px 8px 0 #e8b2c8, 0 16px 30px #7b59721c; }
 .meme-quote::before { content: "“"; position: absolute; top: -17px; left: 15px; color: #ef7fa2; font-family: Georgia, serif; font-size: 53px; font-weight: 900; line-height: 1; }
 .meme-quote p { margin: 0; font-weight: 750; }
-.meme-quote footer { margin-top: 10px; color: #b1859b; font-size: 10px; font-weight: 750; letter-spacing: .07em; }
 .home-tags { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 25px; }
 .home-tags span { padding: 9px 13px; border: 1px solid #ead8e9; border-radius: 999px; color: #71677c; background: #ffffffa8; box-shadow: 0 7px 15px #d7bfce33; font-size: 12px; font-weight: 700; }
 .hanhong-cutout { align-self: end; position: relative; z-index: 2; width: 100%; margin: 0 0 24px; text-align: center; transform: rotate(-1.5deg); }
 .hanhong-cutout img { display: block; width: 100%; max-height: min(670px, calc(100svh - 95px)); object-fit: contain; object-position: bottom center; filter: drop-shadow(10px 13px 0 #c9b3d6) drop-shadow(0 18px 22px #6d4c6940); }
-.hanhong-cutout figcaption { display: inline-block; margin-top: -7px; padding: 7px 11px; border: 2px solid #fff; border-radius: 999px; background: #6c5779; color: #fff; box-shadow: 3px 4px 0 #d28aa7; font-size: 9px; font-weight: 800; letter-spacing: .08em; }
 
 .phone-frame { width: 405px; height: min(780px, calc(100svh - 70px)); min-height: 650px; padding: 9px; border: 10px solid #464058; border-radius: 53px; background: #4a455b; box-shadow: 0 28px 55px #6e45664d, inset 0 0 0 2px #716a82; position: relative; transition: transform .35s ease; }
 .phone-screen { height: 100%; overflow: hidden; position: relative; border-radius: 35px; background: linear-gradient(148deg, #ffd0dc 0%, #f4d8eb 46%, #cec7f5 100%); }
@@ -127,7 +125,6 @@ button { -webkit-tap-highlight-color: transparent; }
   .phone-frame { width: 370px; }
   .home-copy h1 { font-size: 58px; }
   .meme-quote { padding: 18px 18px 15px; font-size: 13px; }
-  .hanhong-cutout figcaption { font-size: 8px; }
 }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
