@@ -39,7 +39,7 @@ type PreparedFingerprint = {
 };
 type TelegramWebApp = {
   initData?: string;
-  initDataUnsafe?: { user?: { id?: number }; start_param?: string; query_id?: string };
+  initDataUnsafe?: { user?: { id?: number; first_name?: string; last_name?: string; username?: string; photo_url?: string; language_code?: string }; start_param?: string; query_id?: string };
   colorScheme?: string;
   themeParams?: Record<string, string>;
   platform?: string;
@@ -236,8 +236,7 @@ export default function Home() {
   const fingerprintStarted = useRef(false);
   const [npcs, setNpcs] = useState<NPC[]>(fallbackNPCs);
   const [achievements, setAchievements] = useState<Achievement[]>([]);
-  const [npcLookup, setNpcLookup] = useState("");
-  const [npcForm, setNpcForm] = useState({ name: "", tg_username: "", description: "", extracted_data: {} as Record<string, unknown> });
+  const [npcForm, setNpcForm] = useState({ name: "", tg_username: "", description: "", avatar_url: "", extracted_data: {} as Record<string, unknown> });
   const [npcEditable, setNpcEditable] = useState(false);
   const [levelForm, setLevelForm] = useState({ name: "", description: "", payload: "" });
   const [formStatus, setFormStatus] = useState("");
@@ -418,31 +417,29 @@ export default function Home() {
     try {
       const response = await fetch(`${API_URL}/api/v1/npc-applications`, { method: "POST", headers: { "Content-Type": "application/json", ...authHeaders }, body: JSON.stringify(npcForm) });
       if (!response.ok) throw new Error("submit failed");
-      setNpcLookup("");
-      setNpcForm({ name: "", tg_username: "", description: "", extracted_data: {} });
+      setNpcForm({ name: "", tg_username: "", description: "", avatar_url: "", extracted_data: {} });
       setNpcEditable(false);
       setFormStatus("NPC申请已提交，等待审核");
     } catch { setFormStatus("提交失败，请稍后重试"); }
   };
 
-  const extractNPCData = async () => {
-    if (!sessionToken || !npcLookup.trim()) { setFormStatus("请先输入TG用户名或t.me链接"); return; }
-    setFormStatus("正在提取TG资料…");
-    try {
-      const response = await fetch(`${API_URL}/api/v1/telegram/extract-profile`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders },
-        body: JSON.stringify({ username: npcLookup }),
-      });
-      if (!response.ok) throw new Error("extract failed");
-      const data = await response.json() as { name: string; tg_username: string; description: string; source: string };
-      setNpcForm({ name: data.name, tg_username: data.tg_username, description: data.description ?? "", extracted_data: data });
-      setNpcEditable(true);
-      setFormStatus("提取完成，现在可以修改名称、用户名和备注");
-    } catch {
-      setNpcEditable(false);
-      setFormStatus("无法提取：该账号可能未与机器人交互，或不是可访问的公开账号");
-    }
+  const extractNPCData = () => {
+    const telegram = getTelegramWebApp();
+    const user = telegram?.initDataUnsafe?.user;
+    if (!sessionToken || !user?.id) { setFormStatus("请从 Telegram Mini App 内打开后再获取"); return; }
+    const fullName = [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
+    const tgUsername = user.username ? `@${user.username}` : `tg:${user.id}`;
+    const data = {
+      id: user.id,
+      name: fullName || user.username || String(user.id),
+      tg_username: tgUsername,
+      avatar_url: user.photo_url ?? "",
+      language_code: user.language_code ?? "",
+      source: "telegram-miniapp",
+    };
+    setNpcForm({ name: data.name, tg_username: data.tg_username, description: "", avatar_url: data.avatar_url, extracted_data: data });
+    setNpcEditable(true);
+    setFormStatus("已获取当前TG用户信息，现在可以修改名称、用户名和备注");
   };
 
   const submitLevel = async () => {
@@ -795,8 +792,11 @@ export default function Home() {
               <h3>申请新 NPC</h3>
               <p>提交角色设定，审核通过后会出现在系统NPC列表中。</p>
               <div className="portal-form">
-                <label>TG账号<input value={npcLookup} onChange={(event) => { setNpcLookup(event.target.value); setNpcEditable(false); }} placeholder="@username 或 https://t.me/username" /></label>
-                <button className="extract-button" onClick={extractNPCData}>提取数据</button>
+                <button className="extract-button" onClick={extractNPCData}>获取我的TG信息</button>
+                <div className="npc-apply-preview">
+                  <div className="npc-apply-avatar">{npcForm.avatar_url ? <img src={npcForm.avatar_url} alt="" /> : (npcForm.name || "你").slice(0, 1)}</div>
+                  <div><strong>{npcForm.name || "等待获取"}</strong><small>{npcForm.tg_username || "点击按钮自动填充"}</small></div>
+                </div>
                 <label>名称<input disabled={!npcEditable} value={npcForm.name} onChange={(event) => setNpcForm({ ...npcForm, name: event.target.value })} placeholder="提取后自动填充" /></label>
                 <label>TG用户名<input disabled={!npcEditable} value={npcForm.tg_username} onChange={(event) => setNpcForm({ ...npcForm, tg_username: event.target.value })} placeholder="提取后自动填充" /></label>
                 <label>备注<textarea disabled={!npcEditable} value={npcForm.description} onChange={(event) => setNpcForm({ ...npcForm, description: event.target.value })} placeholder="有简介则自动填充，可修改" /></label>
