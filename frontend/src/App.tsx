@@ -74,8 +74,16 @@ const fallbackNPCs: NPC[] = [
 const npcProfiles: Record<number, { name: string; avatar: string; tone: ChatMessage["tone"] }> = {
   0: { name: "顶尖哥", avatar: "顶", tone: "mint" },
   1: { name: "群规机器人", avatar: "安", tone: "bot" },
-  9478: { name: "小孩哥", avatar: "孩", tone: "pink" },
 };
+
+function generatedNPCProfile(id: number) {
+  const prefixes = ["纸片", "薄荷", "云朵", "星糖", "泡泡", "月见", "风铃", "栗子", "小灯", "雨巷"];
+  const suffixes = ["旅人", "信使", "巡游者", "收藏家", "夜谈员", "搬运工", "见习生", "记录员", "看板郎", "路过君"];
+  const seed = Math.abs(Math.imul(id || 1, 2654435761));
+  const prefix = prefixes[seed % prefixes.length];
+  const suffix = suffixes[Math.floor(seed / prefixes.length) % suffixes.length];
+  return { name: `${prefix}${suffix}`, avatar: prefix.slice(0, 1), tone: "pink" as ChatMessage["tone"] };
+}
 
 const fallbackLevelNos: Record<string, number> = { "night-watch": 10001, station: 30001 };
 
@@ -84,7 +92,7 @@ function getTelegramWebApp(): TelegramWebApp | undefined {
 }
 
 function levelMessageToChat(level: LevelScript, item: LevelScriptMessage, index: number): ChatMessage {
-  const profile = npcProfiles[item.send_id] ?? { name: `NPC ${item.send_id}`, avatar: "N", tone: "lilac" as ChatMessage["tone"] };
+  const profile = npcProfiles[item.send_id] ?? generatedNPCProfile(item.send_id);
   return {
     id: `${level.group_id}-${level.level_no}-${index}`,
     sender: profile.name,
@@ -105,7 +113,7 @@ const groups: ChatGroup[] = [
     name: "抓小孩",
     tag: `${fallbackLevelNos["night-watch"]} 人`,
     color: "pink",
-    preview: "小孩哥：又来问节点了…",
+    preview: `${generatedNPCProfile(9478).name}：又来问节点了…`,
     unread: 2,
     messages: [],
   },
