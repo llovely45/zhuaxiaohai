@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { collectRelayFingerprint, collectWebRtcIps } from "./fingerprint";
 
 type View = "home" | "handoff" | "chat" | "npc";
 type MobilePane = "groups" | "messages";
@@ -47,6 +48,8 @@ type TelegramWebApp = {
 };
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
+const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY ?? "";
+const AUTH_VERSION = "cf-fingerprint-v1";
 const fallbackNPCs: NPC[] = [
   { id: 0, name: "顶尖哥", tg_username: "@anlianxiaoliu", description: "他很顶尖。", avatar_url: "" },
   { id: 9478, name: "小孩哥", tg_username: "@xiaohai", description: "到处索要代理节点，要不到就开始嘴硬。", avatar_url: "" },
@@ -204,21 +207,6 @@ function PaperBot() {
   );
 }
 
-async function browserFingerprint() {
-  const details = {
-    userAgent: navigator.userAgent,
-    language: navigator.language,
-    platform: navigator.platform,
-    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    screen: `${screen.width}x${screen.height}x${screen.colorDepth}`,
-    hardwareConcurrency: navigator.hardwareConcurrency,
-    deviceMemory: (navigator as Navigator & { deviceMemory?: number }).deviceMemory,
-  };
-  const bytes = new TextEncoder().encode(JSON.stringify(details));
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return { ...details, visitorId: Array.from(new Uint8Array(digest)).map((n) => n.toString(16).padStart(2, "0")).join("") };
-}
-
 export default function Home() {
   const [view, setView] = useState<View>("home");
   const [activeGroupId, setActiveGroupId] = useState("night-watch");
@@ -230,6 +218,15 @@ export default function Home() {
   const [addedMessages, setAddedMessages] = useState<Record<string, ChatMessage[]>>({});
   const [playerId, setPlayerId] = useState("");
   const [sessionToken, setSessionToken] = useState("");
+  const [fingerprintId, setFingerprintId] = useState("");
+  const [miniappId, setMiniappId] = useState("");
+  const [guardPassed, setGuardPassed] = useState(false);
+  const [turnstileToken, setTurnstileToken] = useState("");
+  const [guardLoading, setGuardLoading] = useState(false);
+  const [guardError, setGuardError] = useState("");
+  const [browserNow, setBrowserNow] = useState(() => new Date());
+  const turnstileBox = useRef<HTMLDivElement>(null);
+  const turnstileWidget = useRef<string | null>(null);
   const [npcs, setNpcs] = useState<NPC[]>(fallbackNPCs);
   const [achievements, setAchievements] = useState<Achievement[]>([]);
   const [npcLookup, setNpcLookup] = useState("");
@@ -243,6 +240,9 @@ export default function Home() {
     [activeGroupId],
   );
   const activeMessages = [...activeGroup.messages, ...(addedMessages[activeGroup.id] ?? [])];
+  const browserTime = browserNow.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
+  const browserWeekday = browserNow.toLocaleDateString("zh-CN", { weekday: "long" });
+  const authHeaders = useMemo(() => ({ Authorization: `Bearer ${sessionToken}`, "X-Device-Fingerprint": fingerprintId, "X-Miniapp-ID": miniappId }), [sessionToken, fingerprintId, miniappId]);
 
   useEffect(() => {
     const telegram = getTelegramWebApp();
@@ -256,6 +256,33 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    const clock = window.setInterval(() => setBrowserNow(new Date()), 1000);
+    return () => window.clearInterval(clock);
+  }, []);
+
+  useEffect(() => {
+    const token = localStorage.getItem("paperchat-session-token") ?? "";
+    const player = localStorage.getItem("paperchat-player-id") ?? "";
+    const fingerprint = localStorage.getItem("paperchat-fingerprint-id") ?? "";
+    const miniapp = localStorage.getItem("paperchat-miniapp-id") ?? "";
+    if (token && player && fingerprint && miniapp && localStorage.getItem("paperchat-auth-version") === AUTH_VERSION) {
+      setSessionToken(token); setPlayerId(player); setFingerprintId(fingerprint); setMiniappId(miniapp); setGuardPassed(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (guardPassed || !TURNSTILE_SITE_KEY || !turnstileBox.current) return;
+    let cancelled = false;
+    const render = () => {
+      const turnstile = (window as Window & { turnstile?: { render: (node: HTMLElement, options: Record<string, unknown>) => string; remove: (id: string) => void } }).turnstile;
+      if (!turnstile || !turnstileBox.current) { if (!cancelled) window.setTimeout(render, 150); return; }
+      if (turnstileWidget.current) return;
+      turnstileWidget.current = turnstile.render(turnstileBox.current, { sitekey: TURNSTILE_SITE_KEY, theme: "light", callback: (token: string) => { setTurnstileToken(token); setGuardError(""); }, "expired-callback": () => setTurnstileToken("") });
+    };
+    render(); return () => { cancelled = true; const turnstile = (window as Window & { turnstile?: { remove: (id: string) => void } }).turnstile; if (turnstileWidget.current) { turnstile?.remove(turnstileWidget.current); turnstileWidget.current = null; } };
+  }, [guardPassed]);
+
+  useEffect(() => {
     if (view !== "handoff") return;
     const nextScreen = window.setTimeout(() => {
       setView("chat");
@@ -264,17 +291,17 @@ export default function Home() {
     return () => window.clearTimeout(nextScreen);
   }, [view]);
 
-  useEffect(() => {
-    if (view !== "chat" && view !== "npc") return;
-    const existing = window.localStorage.getItem("paperchat-player-id");
-    const existingToken = window.localStorage.getItem("paperchat-session-token");
-    if (existing && existingToken) { setPlayerId(existing); setSessionToken(existingToken); return; }
+  const passGuard = async () => {
+    if (!turnstileToken) { setGuardError("请先完成Cloudflare验证"); return; }
+    setGuardLoading(true); setGuardError("");
     const telegram = getTelegramWebApp();
-    browserFingerprint()
-      .then((fingerprint) => fetch(`${API_URL}/api/v1/telegram/session`, {
+    try {
+      const [fingerprint, webrtcIps] = await Promise.all([collectRelayFingerprint(), collectWebRtcIps()]);
+      const response = await fetch(`${API_URL}/api/v1/telegram/session`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          turnstile_token: turnstileToken,
           tg_init_data: telegram?.initData ?? "",
           tg_user_id: String(telegram?.initDataUnsafe?.user?.id ?? ""),
           tg_context: {
@@ -286,47 +313,52 @@ export default function Home() {
             theme_params: telegram?.themeParams ?? {},
           },
           fingerprint,
+          webrtc_ips: webrtcIps,
         }),
-      }))
-      .then((response) => response.ok ? response.json() : Promise.reject(new Error("session failed")))
-      .then((data: { id: string; session_token: string }) => {
-        setPlayerId(data.id); setSessionToken(data.session_token);
+      });
+      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error ?? "验证失败");
+      const data = await response.json() as { id: string; session_token: string; fingerprint_id: string; miniapp_id: string };
+        setPlayerId(data.id); setSessionToken(data.session_token); setFingerprintId(data.fingerprint_id); setMiniappId(data.miniapp_id);
         window.localStorage.setItem("paperchat-player-id", data.id);
         window.localStorage.setItem("paperchat-session-token", data.session_token);
+        window.localStorage.setItem("paperchat-fingerprint-id", data.fingerprint_id);
+        window.localStorage.setItem("paperchat-miniapp-id", data.miniapp_id);
+        window.localStorage.setItem("paperchat-auth-version", AUTH_VERSION);
         void fetch(`${API_URL}/api/v1/telegram/events`, {
           method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.session_token}` },
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.session_token}`, "X-Device-Fingerprint": data.fingerprint_id, "X-Miniapp-ID": data.miniapp_id },
           body: JSON.stringify({ event: "miniapp_opened", payload: { path: location.pathname } }),
-        });
-      })
-      .catch(() => setFormStatus("后端暂未连接，页面仍可预览"));
-  }, [view]);
+        }).catch(() => undefined);
+      setGuardPassed(true);
+    } catch (error) { setGuardError(error instanceof Error ? error.message : "验证失败，请重试"); }
+    finally { setGuardLoading(false); }
+  };
 
   useEffect(() => {
-    if (view !== "npc") return;
-    fetch(`${API_URL}/api/v1/npcs`)
+    if (view !== "npc" || !guardPassed) return;
+    fetch(`${API_URL}/api/v1/npcs`, { headers: authHeaders })
       .then((response) => response.ok ? response.json() : Promise.reject(new Error("npc failed")))
       .then((data: { items: NPC[] }) => setNpcs(data.items))
       .catch(() => setNpcs(fallbackNPCs));
-  }, [view]);
+  }, [view, guardPassed, authHeaders]);
 
   useEffect(() => {
     if (!completed || !playerId) return;
     const unlock = (code: string) => fetch(`${API_URL}/api/v1/achievements/unlock`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${sessionToken}` },
+      headers: { "Content-Type": "application/json", ...authHeaders },
       body: JSON.stringify({ code }),
     });
     void unlock("first-catch");
-  }, [completed, playerId, sessionToken]);
+  }, [completed, playerId, authHeaders]);
 
   useEffect(() => {
     if (activeGroupId !== "paper-club" || !playerId) return;
-    fetch(`${API_URL}/api/v1/achievements`, { headers: { Authorization: `Bearer ${sessionToken}` } })
+    fetch(`${API_URL}/api/v1/achievements`, { headers: authHeaders })
       .then((response) => response.ok ? response.json() : Promise.reject(new Error("achievement failed")))
       .then((data: { items: Achievement[] }) => setAchievements(data.items))
       .catch(() => setAchievements([]));
-  }, [activeGroupId, playerId, sessionToken]);
+  }, [activeGroupId, playerId, authHeaders]);
 
   const addMessage = (groupId: string, message: ChatMessage) => {
     setAddedMessages((current) => ({
@@ -356,7 +388,7 @@ export default function Home() {
     if (!npcEditable) { setFormStatus("请先提取TG数据"); return; }
     if (!playerId || !npcForm.name.trim() || !npcForm.tg_username.trim()) { setFormStatus("请填写名称和TG用户名，并确认后端已连接"); return; }
     try {
-      const response = await fetch(`${API_URL}/api/v1/npc-applications`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${sessionToken}` }, body: JSON.stringify(npcForm) });
+      const response = await fetch(`${API_URL}/api/v1/npc-applications`, { method: "POST", headers: { "Content-Type": "application/json", ...authHeaders }, body: JSON.stringify(npcForm) });
       if (!response.ok) throw new Error("submit failed");
       setNpcLookup("");
       setNpcForm({ name: "", tg_username: "", description: "", extracted_data: {} });
@@ -371,7 +403,7 @@ export default function Home() {
     try {
       const response = await fetch(`${API_URL}/api/v1/telegram/extract-profile`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${sessionToken}` },
+        headers: { "Content-Type": "application/json", ...authHeaders },
         body: JSON.stringify({ username: npcLookup }),
       });
       if (!response.ok) throw new Error("extract failed");
@@ -388,7 +420,7 @@ export default function Home() {
   const submitLevel = async () => {
     if (!playerId || !levelForm.name.trim() || !levelForm.description.trim()) { setFormStatus("请填写关卡名称和玩法说明，并确认后端已连接"); return; }
     try {
-      const response = await fetch(`${API_URL}/api/v1/level-submissions`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${sessionToken}` }, body: JSON.stringify(levelForm) });
+      const response = await fetch(`${API_URL}/api/v1/level-submissions`, { method: "POST", headers: { "Content-Type": "application/json", ...authHeaders }, body: JSON.stringify(levelForm) });
       if (!response.ok) throw new Error("submit failed");
       setLevelForm({ name: "", description: "", payload: "" });
       setFormStatus("关卡已提交，等待审核");
@@ -453,6 +485,23 @@ export default function Home() {
     setAddedMessages({});
   };
 
+  if (!guardPassed) {
+    return (
+      <main className="guard-stage">
+        <section className="guard-card">
+          <div className="guard-shield">CF</div>
+          <p className="guard-kicker">SECURE MINI APP</p>
+          <h1>进入游戏前</h1>
+          <p>请先通过Cloudflare安全验证。验证成功后，设备指纹与Telegram Mini App识别码会绑定到本次会话。</p>
+          {!TURNSTILE_SITE_KEY ? <div className="guard-error">未配置 VITE_TURNSTILE_SITE_KEY</div> : <div className="turnstile-box" ref={turnstileBox} />}
+          {guardError && <div className="guard-error">{guardError}</div>}
+          <button disabled={!turnstileToken || guardLoading} onClick={passGuard}>{guardLoading ? "正在校验身份…" : "验证并进入游戏"}</button>
+          <small>受 Cloudflare Turnstile、设备指纹与TG身份联合保护</small>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className={`game-shell view-${view}`}>
       <div className="paper-dot dot-a" />
@@ -481,14 +530,14 @@ export default function Home() {
             <div className="phone-screen">
               <div className="phone-notch" />
               <div className="phone-status">
-                <b>9:41</b>
+                <b>{browserTime}</b>
                 <span>◒ 5G ▰</span>
               </div>
               <div className="wallpaper-sticker sticker-cloud">☁</div>
               <div className="wallpaper-sticker sticker-star">✦</div>
               <div className="home-clock">
-                <p>周五 · 纸片镇</p>
-                <strong>09:41</strong>
+                <p>{browserWeekday} · 游戏</p>
+                <strong>{browserTime}</strong>
               </div>
               <div className="app-grid" aria-label="模拟手机应用">
                 <div className="app-tile">
@@ -560,7 +609,7 @@ export default function Home() {
                 </span>
                 <div>
                   <strong>TeleChat</strong>
-                  <small>纸片镇 · 聊天频道</small>
+                  <small>抓小孩 · 游戏频道</small>
                 </div>
                 <span className="round-button" aria-hidden="true">⌕</span>
               </div>
@@ -702,7 +751,7 @@ export default function Home() {
         <section className="npc-stage" aria-label="NPC展示与申请">
           <header className="npc-header">
             <button onClick={() => { setView("chat"); setMobilePane("groups"); }} aria-label="返回聊天">‹</button>
-            <div><p>纸片镇角色中心</p><h2>系统 NPC</h2></div>
+            <div><p>抓小孩角色中心</p><h2>系统 NPC</h2></div>
             <span>{npcs.length} 位角色</span>
           </header>
           <div className="npc-layout">

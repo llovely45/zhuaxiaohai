@@ -10,7 +10,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -24,24 +26,36 @@ import (
 )
 
 type app struct {
-	db       *pgxpool.Pool
-	redis    *redis.Client
-	botToken string
-	allowed  string
+	db              *pgxpool.Pool
+	redis           *redis.Client
+	botToken        string
+	turnstileSecret string
+	requireTelegram bool
+	allowed         string
 }
 
 type sessionRequest struct {
-	TGInitData  string         `json:"tg_init_data"`
-	TGUserID    string         `json:"tg_user_id"`
-	TGContext   map[string]any `json:"tg_context"`
-	Fingerprint map[string]any `json:"fingerprint"`
+	TGInitData     string         `json:"tg_init_data"`
+	TGUserID       string         `json:"tg_user_id"`
+	TGContext      map[string]any `json:"tg_context"`
+	Fingerprint    map[string]any `json:"fingerprint"`
+	WebRTCIps      []string       `json:"webrtc_ips"`
+	TurnstileToken string         `json:"turnstile_token"`
 }
 
 type player struct {
-	ID           string `json:"id"`
-	TGUserID     string `json:"tg_user_id,omitempty"`
-	Verified     bool   `json:"tg_verified"`
-	SessionToken string `json:"session_token,omitempty"`
+	ID            string `json:"id"`
+	TGUserID      string `json:"tg_user_id,omitempty"`
+	Verified      bool   `json:"tg_verified"`
+	SessionToken  string `json:"session_token,omitempty"`
+	FingerprintID string `json:"fingerprint_id,omitempty"`
+	MiniappID     string `json:"miniapp_id,omitempty"`
+}
+
+type sessionRecord struct {
+	PlayerID      string `json:"player_id"`
+	FingerprintID string `json:"fingerprint_id"`
+	MiniappID     string `json:"miniapp_id"`
 }
 
 func main() {
@@ -56,7 +70,7 @@ func main() {
 	rdb := redis.NewClient(&redis.Options{Addr: env("REDIS_ADDR", "localhost:6379"), Password: os.Getenv("REDIS_PASSWORD")})
 	defer rdb.Close()
 
-	a := &app{db: pool, redis: rdb, botToken: os.Getenv("TELEGRAM_BOT_TOKEN"), allowed: env("CORS_ORIGIN", "http://localhost:3000")}
+	a := &app{db: pool, redis: rdb, botToken: os.Getenv("TELEGRAM_BOT_TOKEN"), turnstileSecret: os.Getenv("TURNSTILE_SECRET_KEY"), requireTelegram: env("REQUIRE_TELEGRAM_AUTH", "true") != "false", allowed: env("CORS_ORIGIN", "http://localhost:3000")}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", a.health)
 	mux.HandleFunc("POST /api/v1/sessions", a.createSession)
@@ -88,7 +102,7 @@ func main() {
 func (a *app) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", a.allowed)
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Device-Fingerprint, X-Miniapp-ID")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -118,14 +132,28 @@ func (a *app) createSession(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
-	fp, _ := json.Marshal(in.Fingerprint)
+	if in.TurnstileToken == "" {
+		fail(w, 400, "Turnstile token is required")
+		return
+	}
+	if ok, err := a.verifyTurnstile(r.Context(), in.TurnstileToken, requestIP(r)); err != nil || !ok {
+		fail(w, 403, "Cloudflare verification failed")
+		return
+	}
+	fingerprintSource := map[string]any{
+		"publicIpInfo":  lookupIPMetadata(r.Context(), requestIP(r)),
+		"webrtcIpInfos": lookupWebRTCMetadata(r.Context(), in.WebRTCIps),
+		"details":       in.Fingerprint,
+	}
+	fp, _ := json.Marshal(fingerprintSource)
 	tgContext, _ := json.Marshal(in.TGContext)
 	hash := sha256.Sum256(fp)
+	fingerprintID := hex.EncodeToString(hash[:])[:24]
 	verified := false
 	if a.botToken != "" && in.TGInitData != "" {
 		verified = verifyTelegram(in.TGInitData, a.botToken)
 	}
-	if in.TGInitData != "" && a.botToken != "" && !verified {
+	if a.requireTelegram && !verified {
 		fail(w, 401, "invalid Telegram Mini App signature")
 		return
 	}
@@ -133,6 +161,14 @@ func (a *app) createSession(w http.ResponseWriter, r *http.Request) {
 		if verifiedUserID := telegramUserID(in.TGInitData); verifiedUserID != "" {
 			in.TGUserID = verifiedUserID
 		}
+	}
+	miniappID := strings.TrimSpace(in.TGUserID)
+	if miniappID == "" && a.botToken == "" {
+		miniappID = "dev-" + fingerprintID
+	}
+	if miniappID == "" {
+		fail(w, 401, "Mini App identifier is required")
+		return
 	}
 	var out player
 	err := a.db.QueryRow(r.Context(), `
@@ -144,7 +180,7 @@ func (a *app) createSession(w http.ResponseWriter, r *http.Request) {
 		  tg_verified = EXCLUDED.tg_verified OR players.tg_verified,
 		  tg_context = EXCLUDED.tg_context,
 		  fingerprint = EXCLUDED.fingerprint, last_seen_at = now()
-		RETURNING id, COALESCE(tg_user_id,''), tg_verified`, in.TGUserID, in.TGInitData, verified, tgContext, hex.EncodeToString(hash[:]), fp).Scan(&out.ID, &out.TGUserID, &out.Verified)
+		RETURNING id, COALESCE(tg_user_id,''), tg_verified`, in.TGUserID, in.TGInitData, verified, tgContext, fingerprintID, fp).Scan(&out.ID, &out.TGUserID, &out.Verified)
 	if err != nil {
 		serverError(w, err)
 		return
@@ -155,7 +191,10 @@ func (a *app) createSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out.SessionToken = base64.RawURLEncoding.EncodeToString(tokenBytes)
-	if err := a.redis.Set(r.Context(), "session:"+out.SessionToken, out.ID, 24*time.Hour).Err(); err != nil {
+	out.FingerprintID = fingerprintID
+	out.MiniappID = miniappID
+	record, _ := json.Marshal(sessionRecord{PlayerID: out.ID, FingerprintID: fingerprintID, MiniappID: miniappID})
+	if err := a.redis.Set(r.Context(), "session:"+out.SessionToken, record, 24*time.Hour).Err(); err != nil {
 		serverError(w, err)
 		return
 	}
@@ -163,6 +202,9 @@ func (a *app) createSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) listNPCs(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.playerID(w, r); !ok {
+		return
+	}
 	rows, err := a.db.Query(r.Context(), `SELECT public_id, name, tg_username, description, avatar_url FROM npcs WHERE is_active ORDER BY sort_order, public_id`)
 	if err != nil {
 		serverError(w, err)
@@ -421,18 +463,135 @@ func telegramUserID(raw string) string {
 	return user.ID.String()
 }
 
+func (a *app) verifyTurnstile(ctx context.Context, token, remoteIP string) (bool, error) {
+	if a.turnstileSecret == "" {
+		return false, errors.New("TURNSTILE_SECRET_KEY is not configured")
+	}
+	form := url.Values{"secret": {a.turnstileSecret}, "response": {token}}
+	if remoteIP != "" {
+		form.Set("remoteip", remoteIP)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://challenges.cloudflare.com/turnstile/v0/siteverify", strings.NewReader(form.Encode()))
+	if err != nil {
+		return false, err
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response, err := (&http.Client{Timeout: 8 * time.Second}).Do(request)
+	if err != nil {
+		return false, err
+	}
+	defer response.Body.Close()
+	var result struct {
+		Success bool `json:"success"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		return false, err
+	}
+	return result.Success, nil
+}
+
+func requestIP(r *http.Request) string {
+	if value := strings.TrimSpace(r.Header.Get("CF-Connecting-IP")); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-For"), ",")[0]); value != "" {
+		return value
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
+
+func lookupWebRTCMetadata(ctx context.Context, values []string) []map[string]string {
+	items := make([]map[string]string, 0, len(values))
+	seen := map[string]bool{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] || !isPublicIP(value) {
+			continue
+		}
+		seen[value] = true
+		items = append(items, lookupIPMetadata(ctx, value))
+	}
+	return items
+}
+
+func isPublicIP(value string) bool {
+	ip := net.ParseIP(value)
+	return ip != nil && !ip.IsPrivate() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && !ip.IsUnspecified()
+}
+
+func lookupIPMetadata(ctx context.Context, value string) map[string]string {
+	empty := map[string]string{"ip": "", "asn": "", "organization": ""}
+	if !isPublicIP(value) {
+		return empty
+	}
+	ip := net.ParseIP(value)
+	host := ""
+	if ipv4 := ip.To4(); ipv4 != nil {
+		host = fmt.Sprintf("%d.%d.%d.%d.origin.asn.cymru.com", ipv4[3], ipv4[2], ipv4[1], ipv4[0])
+	} else {
+		chars := strings.Split(hex.EncodeToString(ip.To16()), "")
+		for i, j := 0, len(chars)-1; i < j; i, j = i+1, j-1 {
+			chars[i], chars[j] = chars[j], chars[i]
+		}
+		host = strings.Join(chars, ".") + ".origin6.asn.cymru.com"
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	records, err := net.DefaultResolver.LookupTXT(lookupCtx, host)
+	if err != nil || len(records) == 0 {
+		return map[string]string{"ip": value, "asn": "", "organization": ""}
+	}
+	parts := strings.Split(records[0], "|")
+	asn := ""
+	if len(parts) > 0 {
+		asn = strings.TrimSpace(parts[0])
+	}
+	if asn == "" {
+		return map[string]string{"ip": value, "asn": "", "organization": ""}
+	}
+	asnRecords, err := net.DefaultResolver.LookupTXT(lookupCtx, "AS"+asn+".asn.cymru.com")
+	organization, normalizedASN := "", asn
+	if err == nil && len(asnRecords) > 0 {
+		info := strings.Split(asnRecords[0], "|")
+		if len(info) > 0 && strings.TrimSpace(info[0]) != "" {
+			normalizedASN = strings.TrimSpace(info[0])
+		}
+		if len(info) > 4 {
+			organization = strings.TrimSpace(info[4])
+		}
+	}
+	return map[string]string{"ip": value, "asn": normalizedASN, "organization": organization}
+}
+
 func (a *app) playerID(w http.ResponseWriter, r *http.Request) (string, bool) {
 	v := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if v == "" {
 		fail(w, 401, "Bearer session token is required")
 		return "", false
 	}
-	playerID, err := a.redis.Get(r.Context(), "session:"+v).Result()
+	raw, err := a.redis.Get(r.Context(), "session:"+v).Result()
 	if err != nil {
 		fail(w, 401, "session expired")
 		return "", false
 	}
-	return playerID, true
+	var record sessionRecord
+	if err := json.Unmarshal([]byte(raw), &record); err != nil {
+		fail(w, 401, "invalid session")
+		return "", false
+	}
+	if r.Header.Get("X-Device-Fingerprint") == "" || r.Header.Get("X-Miniapp-ID") == "" {
+		fail(w, 401, "fingerprint and Mini App identifier are required")
+		return "", false
+	}
+	if !hmac.Equal([]byte(record.FingerprintID), []byte(r.Header.Get("X-Device-Fingerprint"))) || !hmac.Equal([]byte(record.MiniappID), []byte(r.Header.Get("X-Miniapp-ID"))) {
+		fail(w, 403, "session binding mismatch")
+		return "", false
+	}
+	return record.PlayerID, true
 }
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)

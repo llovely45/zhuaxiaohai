@@ -49,6 +49,8 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       CORS_ORIGIN: ${CORS_ORIGIN:?请设置Cloudflare Pages正式域名}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?请设置Telegram机器人Token}
+      REQUIRE_TELEGRAM_AUTH: ${REQUIRE_TELEGRAM_AUTH:-true}
+      TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:?请设置Cloudflare Turnstile密钥}
     ports:
       - "${API_BIND:-127.0.0.1}:8080:8080"
     depends_on:

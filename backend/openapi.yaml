@@ -25,41 +25,50 @@ paths:
   /me:
     get:
       summary: 当前TG玩家资料
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [], fingerprint: [], miniappId: [] }]
       responses: { "200": { description: 玩家资料 } }
   /telegram/events:
     post:
       summary: 预留的Mini App生命周期/交互事件入口
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [], fingerprint: [], miniappId: [] }]
       responses: { "202": { description: 已接收 } }
   /telegram/extract-profile:
     post:
       summary: 根据TG用户名提取可访问的名称、用户名和简介
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [], fingerprint: [], miniappId: [] }]
       responses:
         "200": { description: 已提取资料，前端可进入编辑状态 }
         "404": { description: 机器人无法访问该账号资料 }
   /npcs:
     get:
       summary: 系统NPC列表
+      security: [{ bearerAuth: [], fingerprint: [], miniappId: [] }]
       responses: { "200": { description: NPC列表 } }
   /npc-applications:
     post:
       summary: 提交NPC申请
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [], fingerprint: [], miniappId: [] }]
       responses: { "201": { description: 已提交 } }
   /achievements:
     get:
       summary: 当前玩家成就
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [], fingerprint: [], miniappId: [] }]
       responses: { "200": { description: 成就列表 } }
   /level-submissions:
     post:
       summary: 提交玩家关卡
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [], fingerprint: [], miniappId: [] }]
       responses: { "201": { description: 已提交 } }
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
+    fingerprint:
+      type: apiKey
+      in: header
+      name: X-Device-Fingerprint
+    miniappId:
+      type: apiKey
+      in: header
+      name: X-Miniapp-ID

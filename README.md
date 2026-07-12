@@ -26,6 +26,7 @@ Build output directory: dist
 
 ```text
 VITE_API_URL=https://zxhapi.942040.xyz
+VITE_TURNSTILE_SITE_KEY=Cloudflare Turnstile站点密钥
 ```
 
 将其替换为VPS后端的HTTPS域名，然后重新部署。Pages提供的HTTPS地址可以直接填写到 BotFather 的 Mini App URL。
@@ -41,7 +42,7 @@ https://zhuaxiaohai.pages.dev
 ```bash
 cd frontend
 npm ci
-VITE_API_URL=https://zxhapi.942040.xyz npm run build
+VITE_API_URL=https://zxhapi.942040.xyz VITE_TURNSTILE_SITE_KEY=0x4AAAAAADqk0sh7SZ59i2py npm run build
 npx wrangler pages deploy dist --project-name zhuaxiaohai
 ```
 
@@ -63,6 +64,8 @@ POSTGRES_USER=game
 POSTGRES_PASSWORD=请替换成长随机密码
 REDIS_PASSWORD=请替换成另一个长随机密码
 TELEGRAM_BOT_TOKEN=从BotFather获取的Token
+REQUIRE_TELEGRAM_AUTH=true
+TURNSTILE_SECRET_KEY=Cloudflare Turnstile密钥
 CORS_ORIGIN=https://zhuaxiaohai.pages.dev
 API_BIND=127.0.0.1
 ```
@@ -109,6 +112,14 @@ curl http://127.0.0.1:8080/healthz
 ## Telegram Mini App接口
 
 前端已接入 Telegram Web App SDK，包括 `ready()`、`expand()`、安全区、主题、平台、启动参数和 `initData`。后端通过 `TELEGRAM_BOT_TOKEN` 验证签名，以验证后的TG用户ID为准，并签发Redis会话令牌。
+
+首屏先完成Cloudflare Turnstile验证，并使用与 `llovely45/tg-bot-relay` 相同的OS、CPU、屏幕、字体、Canvas、WebGL、Audio、浏览器和WebRTC信号生成24位SHA-256指纹。会话同时绑定设备指纹与TG Mini App识别码，后续业务请求必须携带：
+
+```text
+Authorization: Bearer <session_token>
+X-Device-Fingerprint: <fingerprint_id>
+X-Miniapp-ID: <verified_tg_user_id>
+```
 
 主要接口：
 
