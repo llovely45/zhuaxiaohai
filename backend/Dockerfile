@@ -6,6 +6,8 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /api ./cmd/api
 
 FROM alpine:3.21
+LABEL org.opencontainers.image.source="https://github.com/llovely45/zhuaxiaohai"
+LABEL org.opencontainers.image.description="抓小孩 Telegram Mini App Go API"
 RUN apk add --no-cache ca-certificates && adduser -D -H app
 USER app
 COPY --from=build /api /api

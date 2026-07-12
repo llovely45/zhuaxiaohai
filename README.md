@@ -2,6 +2,8 @@
 
 公开仓库：https://github.com/llovely45/zhuaxiaohai
 
+Cloudflare Pages：https://zhuaxiaohai.pages.dev
+
 项目采用前后端分离部署：
 
 ```text
@@ -27,6 +29,12 @@ VITE_API_URL=https://api.example.com
 ```
 
 将其替换为VPS后端的HTTPS域名，然后重新部署。Pages提供的HTTPS地址可以直接填写到 BotFather 的 Mini App URL。
+
+当前线上前端地址：
+
+```text
+https://zhuaxiaohai.pages.dev
+```
 
 也可以手动部署：
 
