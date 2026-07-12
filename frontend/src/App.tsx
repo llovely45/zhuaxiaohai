@@ -33,6 +33,10 @@ type NPC = {
   avatar_url: string;
 };
 type Achievement = { code: string; name: string; description: string; unlocked: boolean };
+type PreparedFingerprint = {
+  fingerprint: Awaited<ReturnType<typeof collectRelayFingerprint>>;
+  webrtcIps: string[];
+};
 type TelegramWebApp = {
   initData?: string;
   initDataUnsafe?: { user?: { id?: number }; start_param?: string; query_id?: string };
@@ -224,9 +228,12 @@ export default function Home() {
   const [turnstileToken, setTurnstileToken] = useState("");
   const [guardLoading, setGuardLoading] = useState(false);
   const [guardError, setGuardError] = useState("");
+  const [fingerprintLoading, setFingerprintLoading] = useState(false);
+  const [fingerprintPayload, setFingerprintPayload] = useState<PreparedFingerprint | null>(null);
   const [browserNow, setBrowserNow] = useState(() => new Date());
   const turnstileBox = useRef<HTMLDivElement>(null);
   const turnstileWidget = useRef<string | null>(null);
+  const fingerprintStarted = useRef(false);
   const [npcs, setNpcs] = useState<NPC[]>(fallbackNPCs);
   const [achievements, setAchievements] = useState<Achievement[]>([]);
   const [npcLookup, setNpcLookup] = useState("");
@@ -283,6 +290,27 @@ export default function Home() {
   }, [guardPassed]);
 
   useEffect(() => {
+    if (guardPassed || fingerprintPayload || fingerprintStarted.current) return;
+    let cancelled = false;
+    fingerprintStarted.current = true;
+    setFingerprintLoading(true);
+    Promise.all([collectRelayFingerprint(), collectWebRtcIps()])
+      .then(([fingerprint, webrtcIps]) => {
+        if (!cancelled) setFingerprintPayload({ fingerprint, webrtcIps });
+      })
+      .catch(() => {
+        if (!cancelled) {
+          fingerprintStarted.current = false;
+          setGuardError("设备指纹获取失败，请刷新后重试");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setFingerprintLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [guardPassed, fingerprintPayload]);
+
+  useEffect(() => {
     if (view !== "handoff") return;
     const nextScreen = window.setTimeout(() => {
       setView("chat");
@@ -293,10 +321,10 @@ export default function Home() {
 
   const passGuard = async () => {
     if (!turnstileToken) { setGuardError("请先完成Cloudflare验证"); return; }
+    if (!fingerprintPayload) { setGuardError("设备指纹仍在获取中，请稍后再试"); return; }
     setGuardLoading(true); setGuardError("");
     const telegram = getTelegramWebApp();
     try {
-      const [fingerprint, webrtcIps] = await Promise.all([collectRelayFingerprint(), collectWebRtcIps()]);
       const response = await fetch(`${API_URL}/api/v1/telegram/session`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -312,8 +340,8 @@ export default function Home() {
             color_scheme: telegram?.colorScheme ?? "light",
             theme_params: telegram?.themeParams ?? {},
           },
-          fingerprint,
-          webrtc_ips: webrtcIps,
+          fingerprint: fingerprintPayload.fingerprint,
+          webrtc_ips: fingerprintPayload.webrtcIps,
         }),
       });
       if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error ?? "验证失败");
@@ -494,7 +522,7 @@ export default function Home() {
           <h1>进入游戏前</h1>
           {!TURNSTILE_SITE_KEY ? <div className="guard-error">未配置 VITE_TURNSTILE_SITE_KEY</div> : <div className="turnstile-box" ref={turnstileBox} />}
           {guardError && <div className="guard-error">{guardError}</div>}
-          <button disabled={!turnstileToken || guardLoading} onClick={passGuard}>{guardLoading ? "正在校验身份…" : "验证并进入游戏"}</button>
+          <button disabled={!turnstileToken || fingerprintLoading || !fingerprintPayload || guardLoading} onClick={passGuard}>{guardLoading ? "正在校验身份…" : fingerprintLoading ? "正在获取设备指纹…" : "验证并进入游戏"}</button>
           <small>受 Cloudflare 保护</small>
         </section>
       </main>
