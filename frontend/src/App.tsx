@@ -301,7 +301,7 @@ export default function Home() {
       .catch(() => {
         if (!cancelled) {
           fingerprintStarted.current = false;
-          setGuardError("设备指纹获取失败，请刷新后重试");
+          setGuardError("验证初始化失败，请刷新后重试");
         }
       })
       .finally(() => {
@@ -321,7 +321,7 @@ export default function Home() {
 
   const passGuard = async () => {
     if (!turnstileToken) { setGuardError("请先完成Cloudflare验证"); return; }
-    if (!fingerprintPayload) { setGuardError("设备指纹仍在获取中，请稍后再试"); return; }
+    if (!fingerprintPayload) { setGuardError("验证初始化中，请稍后再试"); return; }
     setGuardLoading(true); setGuardError("");
     const telegram = getTelegramWebApp();
     try {
@@ -522,7 +522,7 @@ export default function Home() {
           <h1>进入游戏前</h1>
           {!TURNSTILE_SITE_KEY ? <div className="guard-error">未配置 VITE_TURNSTILE_SITE_KEY</div> : <div className="turnstile-box" ref={turnstileBox} />}
           {guardError && <div className="guard-error">{guardError}</div>}
-          <button disabled={!turnstileToken || fingerprintLoading || !fingerprintPayload || guardLoading} onClick={passGuard}>{guardLoading ? "正在校验身份…" : fingerprintLoading ? "正在获取设备指纹…" : "验证并进入游戏"}</button>
+          <button disabled={!turnstileToken || fingerprintLoading || !fingerprintPayload || guardLoading} onClick={passGuard}>{guardLoading || fingerprintLoading ? "正在校验身份…" : "验证并进入游戏"}</button>
           <small>受 Cloudflare 保护</small>
         </section>
       </main>
