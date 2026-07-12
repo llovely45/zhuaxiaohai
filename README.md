@@ -141,7 +141,7 @@ X-Miniapp-ID: <verified_tg_user_id>
 - `POST /api/v1/npc-applications`：提交时必须携带 `tg_init_data`、`fingerprint_id`、`miniapp_id`；后端使用 `TELEGRAM_BOT_TOKEN` 重新验签，只允许有 TG username 和头像、且不在黑名单中的用户写入系统 NPC。同 username 已存在时会使用申请时从 Telegram 凭证解析出的头像 URL 和备注替换旧数据。
 - `GET /api/v1/achievements`
 - `GET /api/v1/level-submissions/meta`：提交关卡页获取随机最多 10 个系统 NPC ID，以及可复制给 AI 的关卡 JSON 生成提示词。
-- `POST /api/v1/level-submissions`：提交关卡。前后端都会校验格式必须是 `[{"npc_id":9478,"message":"..."}]`，后端会做 session token 绑定校验、防重放、短时间限频、指纹黑名单和 IP 黑名单检查。
+- `POST /api/v1/level-submissions`：提交关卡。提交审核表使用中间格式 `[{"npc_id":9478,"message":"..."}]`，后端会做 session token 绑定校验、防重放、短时间限频、指纹黑名单和 IP 黑名单检查。审核通过后再转成 `game_levels` 的正式关卡格式。
 
 完整定义见 [`backend/openapi.yaml`](backend/openapi.yaml)。
 
@@ -156,7 +156,7 @@ INSERT INTO reserved_tg_usernames(tg_username, reason) VALUES ('@example', 'rese
 
 `@xiaohai` 和 `@thisisabot` 是系统保留用户名，不能通过 NPC 申请覆盖。
 
-关卡数据保存在 `game_levels` 表，核心字段示例：
+正式关卡数据保存在 `game_levels` 表，游戏只读取这个格式：
 
 ```json
 {
@@ -164,10 +164,19 @@ INSERT INTO reserved_tg_usernames(tg_username, reason) VALUES ('@example', 'rese
   "npc_id": [1, 9478],
   "npc_photo": { "1": "tg_photo_url_1", "9478": "tg_photo_url_2" },
   "messages": [
-    { "npc_id": 1, "message": "大家好" },
-    { "npc_id": 9478, "message": "有没有腾讯云节点", "reportable": true }
+    { "send_id": 1, "text": "大家好" },
+    { "send_id": 9478, "text": "有没有腾讯云节点", "reportable": true }
   ]
 }
+```
+
+提交关卡数据暂存在 `level_submissions.payload`，使用审核中间格式：
+
+```json
+[
+  { "npc_id": 1, "message": "大家好" },
+  { "npc_id": 9478, "message": "有没有腾讯云节点" }
+]
 ```
 
 ## 本地开发与检查

@@ -70,11 +70,13 @@ type telegramInitUser struct {
 
 type levelMessage struct {
 	SendID     int64  `json:"send_id"`
-	NPCID      int64  `json:"npc_id,omitempty"`
 	Text       string `json:"text"`
-	LegacyText string `json:"test,omitempty"`
-	Message    string `json:"message,omitempty"`
 	Reportable bool   `json:"reportable,omitempty"`
+}
+
+type levelSubmissionMessage struct {
+	NPCID   int64  `json:"npc_id"`
+	Message string `json:"message"`
 }
 
 func main() {
@@ -284,17 +286,6 @@ func (a *app) getLevel(w http.ResponseWriter, r *http.Request) {
 	if err := json.Unmarshal(messagesRaw, &messages); err != nil {
 		serverError(w, err)
 		return
-	}
-	for i := range messages {
-		if messages[i].Text == "" {
-			messages[i].Text = strings.TrimSpace(messages[i].Message)
-		}
-		if messages[i].Text == "" {
-			messages[i].Text = strings.TrimSpace(messages[i].LegacyText)
-		}
-		if messages[i].SendID == 0 {
-			messages[i].SendID = messages[i].NPCID
-		}
 	}
 	write(w, 200, map[string]any{"group_id": groupID, "level_no": levelNo, "npc_id": npcIDsOut, "npc_photo": npcPhotos, "messages": messages})
 }
@@ -700,31 +691,21 @@ func normalizeTelegramUsername(value string) string {
 	return "@" + value
 }
 
-func validateLevelPayload(payload string) ([]levelMessage, error) {
-	var raw []levelMessage
+func validateLevelPayload(payload string) ([]levelSubmissionMessage, error) {
+	var raw []levelSubmissionMessage
 	if err := json.Unmarshal([]byte(payload), &raw); err != nil {
 		return nil, err
 	}
 	if len(raw) < 2 || len(raw) > 100 {
 		return nil, errors.New("invalid message count")
 	}
-	out := make([]levelMessage, 0, len(raw))
+	out := make([]levelSubmissionMessage, 0, len(raw))
 	for _, item := range raw {
-		id := item.NPCID
-		if id == 0 {
-			id = item.SendID
-		}
 		message := strings.TrimSpace(item.Message)
-		if message == "" {
-			message = strings.TrimSpace(item.Text)
-		}
-		if message == "" {
-			message = strings.TrimSpace(item.LegacyText)
-		}
-		if id < 0 || message == "" || len([]rune(message)) > 500 {
+		if item.NPCID < 0 || message == "" || len([]rune(message)) > 500 {
 			return nil, errors.New("invalid message")
 		}
-		out = append(out, levelMessage{NPCID: id, SendID: id, Message: message, Text: message, Reportable: item.Reportable})
+		out = append(out, levelSubmissionMessage{NPCID: item.NPCID, Message: message})
 	}
 	return out, nil
 }

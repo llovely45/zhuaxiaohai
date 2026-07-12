@@ -34,7 +34,7 @@ type NPC = {
   avatar_url: string;
 };
 type Achievement = { code: string; name: string; description: string; unlocked: boolean };
-type LevelScriptMessage = { send_id: number; text?: string; test?: string; reportable?: boolean };
+type LevelScriptMessage = { send_id: number; text: string; reportable?: boolean };
 type LevelScript = {
   group_id: string;
   level_no: number;
@@ -91,7 +91,7 @@ function levelMessageToChat(level: LevelScript, item: LevelScriptMessage, index:
     avatarUrl: level.npc_photo[item.send_id] || "",
     tone: profile.tone,
     isBot: profile.tone === "bot",
-    text: item.text ?? item.test ?? "",
+    text: item.text,
     time: "刚刚",
     reportable: item.reportable,
   };
