@@ -148,7 +148,10 @@ NPC 申请黑名单表：
 ```sql
 INSERT INTO tg_blacklist(tg_user_id, reason) VALUES ('123456789', 'manual');
 INSERT INTO fingerprint_blacklist(fingerprint_id, reason) VALUES ('abcdef123456abcdef123456', 'manual');
+INSERT INTO reserved_tg_usernames(tg_username, reason) VALUES ('@example', 'reserved');
 ```
+
+`@xiaohai` 和 `@thisisabot` 是系统保留用户名，不能通过 NPC 申请覆盖。
 
 ## 本地开发与检查
 

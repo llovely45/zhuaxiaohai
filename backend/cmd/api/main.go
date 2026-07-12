@@ -372,6 +372,13 @@ func (a *app) createNPCApplication(w http.ResponseWriter, r *http.Request) {
 		fail(w, 403, "不符合申请要求")
 		return
 	}
+	if reserved, err := a.isReservedNPCUsername(r.Context(), tgUsername); err != nil {
+		serverError(w, err)
+		return
+	} else if reserved {
+		fail(w, 403, "不符合申请要求")
+		return
+	}
 	if blocked, err := a.isTGBlacklisted(r.Context(), tgID); err != nil {
 		serverError(w, err)
 		return
@@ -551,6 +558,25 @@ func normalizeTelegramUsername(value string) string {
 		return ""
 	}
 	return "@" + value
+}
+
+func reservedNPCUsernameFallback(value string) bool {
+	switch strings.ToLower(normalizeTelegramUsername(value)) {
+	case "@xiaohai", "@thisisabot":
+		return true
+	default:
+		return false
+	}
+}
+
+func (a *app) isReservedNPCUsername(ctx context.Context, value string) (bool, error) {
+	username := strings.ToLower(normalizeTelegramUsername(value))
+	if reservedNPCUsernameFallback(username) {
+		return true, nil
+	}
+	var reserved bool
+	err := a.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM reserved_tg_usernames WHERE lower(tg_username)=lower($1))`, username).Scan(&reserved)
+	return reserved, err
 }
 
 func (a *app) isTGBlacklisted(ctx context.Context, tgID string) (bool, error) {
