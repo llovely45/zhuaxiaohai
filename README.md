@@ -25,7 +25,7 @@ Build output directory: dist
 添加构建环境变量：
 
 ```text
-VITE_API_URL=https://api.example.com
+VITE_API_URL=https://zxhapi.942040.xyz
 ```
 
 将其替换为VPS后端的HTTPS域名，然后重新部署。Pages提供的HTTPS地址可以直接填写到 BotFather 的 Mini App URL。
@@ -41,7 +41,7 @@ https://zhuaxiaohai.pages.dev
 ```bash
 cd frontend
 npm ci
-VITE_API_URL=https://api.example.com npm run build
+VITE_API_URL=https://zxhapi.942040.xyz npm run build
 npx wrangler pages deploy dist --project-name zhuaxiaohai
 ```
 
@@ -63,11 +63,11 @@ POSTGRES_USER=game
 POSTGRES_PASSWORD=请替换成长随机密码
 REDIS_PASSWORD=请替换成另一个长随机密码
 TELEGRAM_BOT_TOKEN=从BotFather获取的Token
-CORS_ORIGIN=https://你的项目.pages.dev
+CORS_ORIGIN=https://zhuaxiaohai.pages.dev
 API_BIND=127.0.0.1
 ```
 
-后端默认只监听 `127.0.0.1:8080`。使用Nginx或Caddy反向代理到 `https://api.example.com`，不要把PostgreSQL或Redis端口暴露到公网。
+后端默认只监听 `127.0.0.1:8080`。使用Nginx或Caddy反向代理到 `https://zxhapi.942040.xyz`，不要把PostgreSQL或Redis端口暴露到公网。
 
 ## VPS直接拉取GHCR镜像
 
