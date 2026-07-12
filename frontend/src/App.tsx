@@ -13,6 +13,7 @@ type ChatMessage = {
   text: string;
   time: string;
   reportable?: boolean;
+  correctReport?: boolean;
   isBot?: boolean;
 };
 
@@ -85,7 +86,7 @@ function getTelegramWebApp(): TelegramWebApp | undefined {
 function levelMessageToChat(level: LevelScript, item: LevelScriptMessage, index: number): ChatMessage {
   const profile = npcProfiles[item.send_id] ?? { name: `NPC ${item.send_id}`, avatar: "N", tone: "lilac" as ChatMessage["tone"] };
   return {
-    id: level.group_id === "night-watch" && item.reportable ? "clue-01" : `${level.group_id}-${level.level_no}-${index}`,
+    id: `${level.group_id}-${level.level_no}-${index}`,
     sender: profile.name,
     avatar: profile.avatar,
     avatarUrl: level.npc_photo[item.send_id] || "",
@@ -94,6 +95,7 @@ function levelMessageToChat(level: LevelScript, item: LevelScriptMessage, index:
     text: item.text,
     time: "刚刚",
     reportable: item.reportable,
+    correctReport: level.group_id === "night-watch" && !!item.reportable,
   };
 }
 
@@ -248,6 +250,7 @@ export default function Home() {
   }, [levelSubmissionMeta]);
   const baseMessages = activeGroup.id === "level-submit" ? levelSubmitMessages : activeGroup.messages;
   const activeMessages = [...baseMessages, ...(addedMessages[activeGroup.id] ?? [])];
+  const quotedMessage = activeMessages.find((message) => message.id === quotedId);
   const browserTime = browserNow.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
   const browserWeekday = browserNow.toLocaleDateString("zh-CN", { weekday: "long" });
   const authHeaders = useMemo(() => ({ Authorization: `Bearer ${sessionToken}`, "X-Device-Fingerprint": fingerprintId, "X-Miniapp-ID": miniappId }), [sessionToken, fingerprintId, miniappId]);
@@ -398,6 +401,10 @@ export default function Home() {
       .then((data: LevelSubmissionMeta) => setLevelSubmissionMeta(data))
       .catch(() => setLevelSubmissionMeta({ npc_ids: [], npc_ids_text: "", editor_prompt: "请稍后重试。" }));
   }, [activeGroupId, playerId, authHeaders]);
+
+  useEffect(() => {
+    if (quotedId && !quotedMessage) setQuotedId(null);
+  }, [quotedId, quotedMessage]);
 
   useEffect(() => {
     if (view !== "chat" || !authHeaders.Authorization || !["night-watch", "station"].includes(activeGroupId)) return;
@@ -556,7 +563,7 @@ export default function Home() {
 
     if (!/^\/(?:spaw|report)\b/i.test(message)) return;
 
-    const isCorrectReport = activeGroup.id === "night-watch" && quotedId === "clue-01";
+    const isCorrectReport = activeGroup.id === "night-watch" && !!quotedMessage?.correctReport;
     window.setTimeout(() => {
       if (isCorrectReport) {
         addMessage(activeGroup.id, {
@@ -824,12 +831,12 @@ export default function Home() {
               )}
 
               {activeGroup.id !== "level-submit" && <div className="composer-wrap">
-                {quotedId && (
+                {quotedMessage && (
                   <div className="quote-bar">
                     <span className="quote-stem" />
                     <div>
-                      <b>已引用 · 小孩哥</b>
-                      <small>[不当索要] 重复索要节点并攻击群友</small>
+                      <b>已引用 · {quotedMessage.sender}</b>
+                      <small>{quotedMessage.text}</small>
                     </div>
                     <button onClick={() => setQuotedId(null)} aria-label="取消引用">×</button>
                   </div>
