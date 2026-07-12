@@ -52,7 +52,7 @@ services:
       REQUIRE_TELEGRAM_AUTH: ${REQUIRE_TELEGRAM_AUTH:-true}
       TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:?请设置Cloudflare Turnstile密钥}
     ports:
-      - "${API_BIND:-127.0.0.1}:8080:8080"
+      - "${API_BIND:-127.0.0.1}:${API_PORT:-30001}:8080"
     depends_on:
       migrate: { condition: service_completed_successfully }
       redis: { condition: service_healthy }

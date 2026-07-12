@@ -68,9 +68,18 @@ REQUIRE_TELEGRAM_AUTH=true
 TURNSTILE_SECRET_KEY=Cloudflare Turnstile密钥
 CORS_ORIGIN=https://zhuaxiaohai.pages.dev
 API_BIND=127.0.0.1
+API_PORT=30001
 ```
 
-后端默认只监听 `127.0.0.1:8080`。使用Nginx或Caddy反向代理到 `https://zxhapi.942040.xyz`，不要把PostgreSQL或Redis端口暴露到公网。
+后端默认只监听 `127.0.0.1:30001`，容器内部仍使用 `8080`。使用Nginx或Caddy反向代理到 `https://zxhapi.942040.xyz`，不要把PostgreSQL或Redis端口暴露到公网。
+
+Caddy示例：
+
+```caddyfile
+zxhapi.942040.xyz {
+    reverse_proxy 127.0.0.1:30001
+}
+```
 
 ## VPS直接拉取GHCR镜像
 
@@ -104,7 +113,7 @@ docker compose up -d --no-build
 ```bash
 docker compose ps
 docker compose logs -f api
-curl http://127.0.0.1:8080/healthz
+curl http://127.0.0.1:30001/healthz
 ```
 
 数据库迁移会在API启动前自动执行，PostgreSQL和Redis数据保存在Docker volumes中。不要使用 `docker compose down -v`，除非确定要删除全部数据。
