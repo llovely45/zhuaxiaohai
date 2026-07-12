@@ -54,6 +54,7 @@ type TelegramWebApp = {
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY ?? "";
 const AUTH_VERSION = "cf-fingerprint-v1";
+const NPC_AVATAR_CACHE_KEY = "paperchat-npc-avatar-cache";
 const fallbackNPCs: NPC[] = [
   { id: 0, name: "顶尖哥", tg_username: "@anlianxiaoliu", description: "他很顶尖。", avatar_url: "" },
   { id: 9478, name: "小孩哥", tg_username: "@xiaohai", description: "到处索要代理节点，要不到就开始嘴硬。", avatar_url: "" },
@@ -62,6 +63,22 @@ const fallbackNPCs: NPC[] = [
 
 function getTelegramWebApp(): TelegramWebApp | undefined {
   return (window as Window & { Telegram?: { WebApp?: TelegramWebApp } }).Telegram?.WebApp;
+}
+
+function normalizeTGUsername(value: string) {
+  const username = value.trim().replace(/^@/, "");
+  return username ? `@${username}`.toLowerCase() : "";
+}
+
+function loadNpcAvatarCache() {
+  try {
+    const value = window.localStorage.getItem(NPC_AVATAR_CACHE_KEY);
+    return value ? JSON.parse(value) as Record<string, string> : {};
+  } catch { return {}; }
+}
+
+function saveNpcAvatarCache(cache: Record<string, string>) {
+  try { window.localStorage.setItem(NPC_AVATAR_CACHE_KEY, JSON.stringify(cache)); } catch { return; }
 }
 
 const groups: ChatGroup[] = [
@@ -235,6 +252,7 @@ export default function Home() {
   const turnstileWidget = useRef<string | null>(null);
   const fingerprintStarted = useRef(false);
   const [npcs, setNpcs] = useState<NPC[]>(fallbackNPCs);
+  const [npcAvatarCache, setNpcAvatarCache] = useState<Record<string, string>>(() => loadNpcAvatarCache());
   const [achievements, setAchievements] = useState<Achievement[]>([]);
   const [npcForm, setNpcForm] = useState({ name: "", tg_username: "", description: "", avatar_url: "", extracted_data: {} as Record<string, unknown> });
   const [npcEditable, setNpcEditable] = useState(false);
@@ -249,6 +267,17 @@ export default function Home() {
   const browserTime = browserNow.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
   const browserWeekday = browserNow.toLocaleDateString("zh-CN", { weekday: "long" });
   const authHeaders = useMemo(() => ({ Authorization: `Bearer ${sessionToken}`, "X-Device-Fingerprint": fingerprintId, "X-Miniapp-ID": miniappId }), [sessionToken, fingerprintId, miniappId]);
+  const avatarForNPC = (npc: NPC) => npc.avatar_url || npcAvatarCache[normalizeTGUsername(npc.tg_username)] || "";
+
+  const cacheNpcAvatar = (tgUsername: string, avatarUrl: string) => {
+    const key = normalizeTGUsername(tgUsername);
+    if (!key || !avatarUrl) return;
+    setNpcAvatarCache((current) => {
+      const next = { ...current, [key]: avatarUrl };
+      saveNpcAvatarCache(next);
+      return next;
+    });
+  };
 
   useEffect(() => {
     const telegram = getTelegramWebApp();
@@ -420,7 +449,9 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeaders },
         body: JSON.stringify({
-          ...npcForm,
+          name: npcForm.name,
+          tg_username: npcForm.tg_username,
+          description: npcForm.description,
           tg_init_data: telegram?.initData ?? "",
           fingerprint_id: fingerprintId,
           miniapp_id: miniappId,
@@ -460,6 +491,7 @@ export default function Home() {
       language_code: user.language_code ?? "",
       source: "telegram-miniapp",
     };
+    cacheNpcAvatar(data.tg_username, data.avatar_url);
     setNpcForm({ name: data.name, tg_username: data.tg_username, description: "", avatar_url: data.avatar_url, extracted_data: data });
     setNpcEditable(true);
     setFormStatus("已获取当前TG用户信息，现在可以修改名称、用户名和备注");
@@ -803,12 +835,15 @@ export default function Home() {
           </header>
           <div className="npc-layout">
             <div className="npc-gallery">
-              {npcs.map((npc) => (
-                <article className="npc-card" key={npc.id}>
-                  <div className="npc-portrait">{npc.avatar_url ? <img src={npc.avatar_url} alt="" /> : npc.name.slice(0, 1)}</div>
-                  <div><span>#{npc.id}</span><h3>{npc.name}</h3><b>{npc.tg_username}</b><p>{npc.description}</p></div>
-                </article>
-              ))}
+              {npcs.map((npc) => {
+                const avatar = avatarForNPC(npc);
+                return (
+                  <article className="npc-card" key={npc.id}>
+                    <div className="npc-portrait">{avatar ? <img src={avatar} alt="" /> : npc.name.slice(0, 1)}</div>
+                    <div><span>#{npc.id}</span><h3>{npc.name}</h3><b>{npc.tg_username}</b><p>{npc.description}</p></div>
+                  </article>
+                );
+              })}
             </div>
             <aside className="npc-apply">
               <p className="portal-kicker">CREATE A PAPER NPC</p>

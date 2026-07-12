@@ -347,7 +347,6 @@ func (a *app) createNPCApplication(w http.ResponseWriter, r *http.Request) {
 		Name          string         `json:"name"`
 		TGUsername    string         `json:"tg_username"`
 		Description   string         `json:"description"`
-		AvatarURL     string         `json:"avatar_url"`
 		ExtractedData map[string]any `json:"extracted_data"`
 		TGInitData    string         `json:"tg_init_data"`
 		FingerprintID string         `json:"fingerprint_id"`
@@ -402,15 +401,9 @@ func (a *app) createNPCApplication(w http.ResponseWriter, r *http.Request) {
 		name = strings.TrimPrefix(tgUsername, "@")
 	}
 	description := strings.TrimSpace(in.Description)
-	if in.ExtractedData == nil {
-		in.ExtractedData = map[string]any{}
-	}
-	in.ExtractedData["verified_tg_id"] = tgID
-	in.ExtractedData["verified_tg_username"] = tgUsername
-	in.ExtractedData["verified_avatar_url"] = avatarURL
-	in.ExtractedData["source"] = "telegram-miniapp"
+	extractedData := map[string]any{"verified_tg_id": tgID, "verified_tg_username": tgUsername, "has_verified_avatar": true, "source": "telegram-miniapp"}
 	var id string
-	extracted, _ := json.Marshal(in.ExtractedData)
+	extracted, _ := json.Marshal(extractedData)
 	err := a.db.QueryRow(r.Context(), `INSERT INTO npc_applications(player_id,name,persona,tg_username,description,extracted_data,status) VALUES($1,$2,$3,$4,$5,$6,'approved') RETURNING id`, pid, name, description, tgUsername, description, extracted).Scan(&id)
 	if err != nil {
 		serverError(w, err)
@@ -421,9 +414,9 @@ func (a *app) createNPCApplication(w http.ResponseWriter, r *http.Request) {
 	var npcName, npcUsername, npcDescription, npcAvatar string
 	err = a.db.QueryRow(r.Context(), `SELECT id FROM npcs WHERE lower(tg_username)=lower($1) LIMIT 1`, tgUsername).Scan(&existingID)
 	if err == nil {
-		err = a.db.QueryRow(r.Context(), `UPDATE npcs SET avatar_url=$1, description=$2, is_active=true WHERE id=$3 RETURNING public_id,name,tg_username,description,avatar_url`, avatarURL, description, existingID).Scan(&npcPublicID, &npcName, &npcUsername, &npcDescription, &npcAvatar)
+		err = a.db.QueryRow(r.Context(), `UPDATE npcs SET avatar_url='', description=$1, is_active=true WHERE id=$2 RETURNING public_id,name,tg_username,description,avatar_url`, description, existingID).Scan(&npcPublicID, &npcName, &npcUsername, &npcDescription, &npcAvatar)
 	} else if errors.Is(err, pgx.ErrNoRows) {
-		err = a.db.QueryRow(r.Context(), `INSERT INTO npcs(name,tg_username,description,avatar_url,rarity,sort_order,is_active) VALUES($1,$2,$3,$4,'普通',100,true) RETURNING public_id,name,tg_username,description,avatar_url`, uniqueNPCName(r.Context(), a.db, name, tgUsername), tgUsername, description, avatarURL).Scan(&npcPublicID, &npcName, &npcUsername, &npcDescription, &npcAvatar)
+		err = a.db.QueryRow(r.Context(), `INSERT INTO npcs(name,tg_username,description,rarity,sort_order,is_active) VALUES($1,$2,$3,'普通',100,true) RETURNING public_id,name,tg_username,description,avatar_url`, uniqueNPCName(r.Context(), a.db, name, tgUsername), tgUsername, description).Scan(&npcPublicID, &npcName, &npcUsername, &npcDescription, &npcAvatar)
 	}
 	if err != nil {
 		serverError(w, err)
