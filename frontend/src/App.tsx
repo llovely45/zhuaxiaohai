@@ -492,11 +492,10 @@ export default function Home() {
           <div className="guard-shield">CF</div>
           <p className="guard-kicker">SECURE MINI APP</p>
           <h1>进入游戏前</h1>
-          <p>请先通过Cloudflare安全验证。验证成功后，设备指纹与Telegram Mini App识别码会绑定到本次会话。</p>
           {!TURNSTILE_SITE_KEY ? <div className="guard-error">未配置 VITE_TURNSTILE_SITE_KEY</div> : <div className="turnstile-box" ref={turnstileBox} />}
           {guardError && <div className="guard-error">{guardError}</div>}
           <button disabled={!turnstileToken || guardLoading} onClick={passGuard}>{guardLoading ? "正在校验身份…" : "验证并进入游戏"}</button>
-          <small>受 Cloudflare Turnstile、设备指纹与TG身份联合保护</small>
+          <small>受 Cloudflare 保护</small>
         </section>
       </main>
     );
