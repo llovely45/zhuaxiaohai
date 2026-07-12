@@ -22,5 +22,4 @@ INSERT INTO reserved_tg_usernames(tg_username, reason) VALUES
 ON CONFLICT(tg_username) DO NOTHING;
 
 ALTER TABLE npcs ADD COLUMN IF NOT EXISTS avatar_url text NOT NULL DEFAULT '';
-UPDATE npcs SET avatar_url='' WHERE avatar_url <> '';
 CREATE INDEX IF NOT EXISTS npcs_tg_username_lower_idx ON npcs (lower(tg_username)) WHERE tg_username <> '';

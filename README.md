@@ -137,7 +137,7 @@ X-Miniapp-ID: <verified_tg_user_id>
 - `POST /api/v1/telegram/events`
 - `POST /api/v1/telegram/extract-profile`
 - `GET /api/v1/npcs`
-- `POST /api/v1/npc-applications`：提交时必须携带 `tg_init_data`、`fingerprint_id`、`miniapp_id`；后端使用 `TELEGRAM_BOT_TOKEN` 重新验签，只允许有 TG username 和头像、且不在黑名单中的用户写入系统 NPC。同 username 已存在时会替换备注。头像 URL 不落库，由前端从 Telegram Mini App 获取并缓存在用户浏览器本地。
+- `POST /api/v1/npc-applications`：提交时必须携带 `tg_init_data`、`fingerprint_id`、`miniapp_id`；后端使用 `TELEGRAM_BOT_TOKEN` 重新验签，只允许有 TG username 和头像、且不在黑名单中的用户写入系统 NPC。同 username 已存在时会使用申请时从 Telegram 凭证解析出的头像 URL 和备注替换旧数据。
 - `GET /api/v1/achievements`
 - `POST /api/v1/level-submissions`
 
