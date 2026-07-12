@@ -76,13 +76,12 @@ const npcProfiles: Record<number, { name: string; avatar: string; tone: ChatMess
   1: { name: "群规机器人", avatar: "安", tone: "bot" },
 };
 
-function generatedNPCProfile(id: number) {
+function randomNPCProfile() {
   const adjectives = ["黑调", "悲伤", "暴躁", "迷路", "冷门", "发呆", "阴暗", "嘴硬", "离谱", "困惑", "急眼", "沉默"];
   const nouns = ["迪克", "土豆", "海豹", "番茄", "螺丝", "电池", "薯条", "键盘", "乌云", "汽水", "面包", "路灯"];
-  const seed = Math.abs(Math.imul(id || 1, 2654435761));
-  const adjective = adjectives[seed % adjectives.length];
-  const noun = nouns[Math.floor(seed / adjectives.length) % nouns.length];
-  const number = String((Math.floor(seed / adjectives.length / nouns.length) % 900) + 100);
+  const adjective = adjectives[Math.floor(Math.random() * adjectives.length)];
+  const noun = nouns[Math.floor(Math.random() * nouns.length)];
+  const number = String(Math.floor(Math.random() * 900) + 100);
   return { name: `${adjective}的${noun}${number}`, avatar: noun.slice(0, 1), tone: "pink" as ChatMessage["tone"] };
 }
 
@@ -92,8 +91,19 @@ function getTelegramWebApp(): TelegramWebApp | undefined {
   return (window as Window & { Telegram?: { WebApp?: TelegramWebApp } }).Telegram?.WebApp;
 }
 
-function levelMessageToChat(level: LevelScript, item: LevelScriptMessage, index: number): ChatMessage {
-  const profile = npcProfiles[item.send_id] ?? generatedNPCProfile(item.send_id);
+function createLevelProfileMap(level: LevelScript) {
+  const profiles: Record<number, { name: string; avatar: string; tone: ChatMessage["tone"] }> = {};
+  level.npc_id.forEach((id) => {
+    profiles[id] = npcProfiles[id] ?? randomNPCProfile();
+  });
+  level.messages.forEach((message) => {
+    profiles[message.send_id] = profiles[message.send_id] ?? npcProfiles[message.send_id] ?? randomNPCProfile();
+  });
+  return profiles;
+}
+
+function levelMessageToChat(level: LevelScript, item: LevelScriptMessage, index: number, profiles: Record<number, { name: string; avatar: string; tone: ChatMessage["tone"] }>): ChatMessage {
+  const profile = profiles[item.send_id] ?? npcProfiles[item.send_id] ?? randomNPCProfile();
   return {
     id: `${level.group_id}-${level.level_no}-${index}`,
     sender: profile.name,
@@ -114,7 +124,7 @@ const groups: ChatGroup[] = [
     name: "抓小孩",
     tag: `${fallbackLevelNos["night-watch"]} 人`,
     color: "pink",
-    preview: `${generatedNPCProfile(9478).name}：又来问节点了…`,
+    preview: "群友：又来问节点了…",
     unread: 2,
     messages: [],
   },
@@ -423,11 +433,12 @@ export default function Home() {
       .then((level: LevelScript) => {
         if (cancelled) return;
         setLevelTags((current) => ({ ...current, [level.group_id]: `${level.level_no} 人` }));
+        const profiles = createLevelProfileMap(level);
         let elapsed = 0;
         level.messages.forEach((message, index) => {
           elapsed += Math.floor(Math.random() * 1000);
           const timer = window.setTimeout(() => {
-            addMessage(level.group_id, levelMessageToChat(level, message, index));
+            addMessage(level.group_id, levelMessageToChat(level, message, index, profiles));
           }, elapsed);
           levelTimers.current.push(timer);
         });
