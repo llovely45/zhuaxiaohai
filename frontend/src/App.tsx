@@ -77,12 +77,13 @@ const npcProfiles: Record<number, { name: string; avatar: string; tone: ChatMess
 };
 
 function generatedNPCProfile(id: number) {
-  const prefixes = ["纸片", "薄荷", "云朵", "星糖", "泡泡", "月见", "风铃", "栗子", "小灯", "雨巷"];
-  const suffixes = ["旅人", "信使", "巡游者", "收藏家", "夜谈员", "搬运工", "见习生", "记录员", "看板郎", "路过君"];
+  const adjectives = ["黑调", "悲伤", "暴躁", "迷路", "冷门", "发呆", "阴暗", "嘴硬", "离谱", "困惑", "急眼", "沉默"];
+  const nouns = ["迪克", "土豆", "海豹", "番茄", "螺丝", "电池", "薯条", "键盘", "乌云", "汽水", "面包", "路灯"];
   const seed = Math.abs(Math.imul(id || 1, 2654435761));
-  const prefix = prefixes[seed % prefixes.length];
-  const suffix = suffixes[Math.floor(seed / prefixes.length) % suffixes.length];
-  return { name: `${prefix}${suffix}`, avatar: prefix.slice(0, 1), tone: "pink" as ChatMessage["tone"] };
+  const adjective = adjectives[seed % adjectives.length];
+  const noun = nouns[Math.floor(seed / adjectives.length) % nouns.length];
+  const number = String((Math.floor(seed / adjectives.length / nouns.length) % 900) + 100);
+  return { name: `${adjective}的${noun}${number}`, avatar: noun.slice(0, 1), tone: "pink" as ChatMessage["tone"] };
 }
 
 const fallbackLevelNos: Record<string, number> = { "night-watch": 10001, station: 30001 };
