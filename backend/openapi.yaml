@@ -81,11 +81,31 @@ paths:
       summary: 当前玩家成就
       security: [{ bearerAuth: [], fingerprint: [], miniappId: [] }]
       responses: { "200": { description: 成就列表 } }
+  /level-submissions/meta:
+    get:
+      summary: 获取提交关卡所需的随机NPC列表和AI提示词
+      security: [{ bearerAuth: [], fingerprint: [], miniappId: [] }]
+      responses: { "200": { description: 返回随机NPC ID和编辑器提示词 } }
   /level-submissions:
     post:
-      summary: 提交玩家关卡
+      summary: 提交玩家关卡，服务端校验格式、防重放、限频和黑名单
       security: [{ bearerAuth: [], fingerprint: [], miniappId: [] }]
-      responses: { "201": { description: 已提交 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, description, payload]
+              properties:
+                name: { type: string }
+                description: { type: string }
+                payload: { type: string, description: 'JSON数组字符串，格式 [{"npc_id":9478,"message":"..."}]' }
+      responses:
+        "201": { description: 已提交 }
+        "400": { description: 关卡数据格式不符合要求 }
+        "409": { description: 重复提交 }
+        "429": { description: 短时间内提交过于频繁 }
 components:
   securitySchemes:
     bearerAuth:

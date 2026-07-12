@@ -140,7 +140,8 @@ X-Miniapp-ID: <verified_tg_user_id>
 - `GET /api/v1/levels?group_id=night-watch`：打开群聊时下发关卡脚本，返回 `level_no`、`npc_id`、`npc_photo` 和 `messages`。前端按 0-1 秒随机间隔逐条弹出消息。
 - `POST /api/v1/npc-applications`：提交时必须携带 `tg_init_data`、`fingerprint_id`、`miniapp_id`；后端使用 `TELEGRAM_BOT_TOKEN` 重新验签，只允许有 TG username 和头像、且不在黑名单中的用户写入系统 NPC。同 username 已存在时会使用申请时从 Telegram 凭证解析出的头像 URL 和备注替换旧数据。
 - `GET /api/v1/achievements`
-- `POST /api/v1/level-submissions`
+- `GET /api/v1/level-submissions/meta`：提交关卡页获取随机最多 10 个系统 NPC ID，以及可复制给 AI 的关卡 JSON 生成提示词。
+- `POST /api/v1/level-submissions`：提交关卡。前后端都会校验格式必须是 `[{"npc_id":9478,"message":"..."}]`，后端会做 session token 绑定校验、防重放、短时间限频、指纹黑名单和 IP 黑名单检查。
 
 完整定义见 [`backend/openapi.yaml`](backend/openapi.yaml)。
 
@@ -149,6 +150,7 @@ NPC 申请黑名单表：
 ```sql
 INSERT INTO tg_blacklist(tg_user_id, reason) VALUES ('123456789', 'manual');
 INSERT INTO fingerprint_blacklist(fingerprint_id, reason) VALUES ('abcdef123456abcdef123456', 'manual');
+INSERT INTO ip_blacklist(ip, reason) VALUES ('203.0.113.10', 'manual');
 INSERT INTO reserved_tg_usernames(tg_username, reason) VALUES ('@example', 'reserved');
 ```
 
@@ -162,8 +164,8 @@ INSERT INTO reserved_tg_usernames(tg_username, reason) VALUES ('@example', 'rese
   "npc_id": [1, 9478],
   "npc_photo": { "1": "tg_photo_url_1", "9478": "tg_photo_url_2" },
   "messages": [
-    { "send_id": 1, "text": "大家好" },
-    { "send_id": 9478, "text": "有没有腾讯云节点", "reportable": true }
+    { "npc_id": 1, "message": "大家好" },
+    { "npc_id": 9478, "message": "有没有腾讯云节点", "reportable": true }
   ]
 }
 ```

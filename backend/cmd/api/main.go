@@ -70,8 +70,10 @@ type telegramInitUser struct {
 
 type levelMessage struct {
 	SendID     int64  `json:"send_id"`
+	NPCID      int64  `json:"npc_id,omitempty"`
 	Text       string `json:"text"`
 	LegacyText string `json:"test,omitempty"`
+	Message    string `json:"message,omitempty"`
 	Reportable bool   `json:"reportable,omitempty"`
 }
 
@@ -96,6 +98,7 @@ func main() {
 	mux.HandleFunc("POST /api/v1/telegram/events", a.createTelegramEvent)
 	mux.HandleFunc("GET /api/v1/npcs", a.listNPCs)
 	mux.HandleFunc("GET /api/v1/levels", a.getLevel)
+	mux.HandleFunc("GET /api/v1/level-submissions/meta", a.levelSubmissionMeta)
 	mux.HandleFunc("POST /api/v1/telegram/extract-profile", a.extractTelegramProfile)
 	mux.HandleFunc("POST /api/v1/npc-applications", a.createNPCApplication)
 	mux.HandleFunc("GET /api/v1/achievements", a.listAchievements)
@@ -284,7 +287,13 @@ func (a *app) getLevel(w http.ResponseWriter, r *http.Request) {
 	}
 	for i := range messages {
 		if messages[i].Text == "" {
-			messages[i].Text = messages[i].LegacyText
+			messages[i].Text = strings.TrimSpace(messages[i].Message)
+		}
+		if messages[i].Text == "" {
+			messages[i].Text = strings.TrimSpace(messages[i].LegacyText)
+		}
+		if messages[i].SendID == 0 {
+			messages[i].SendID = messages[i].NPCID
 		}
 	}
 	write(w, 200, map[string]any{"group_id": groupID, "level_no": levelNo, "npc_id": npcIDsOut, "npc_photo": npcPhotos, "messages": messages})
@@ -525,6 +534,33 @@ func (a *app) unlockAchievement(w http.ResponseWriter, r *http.Request) {
 	write(w, 200, map[string]bool{"ok": true})
 }
 
+func (a *app) levelSubmissionMeta(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.playerID(w, r); !ok {
+		return
+	}
+	rows, err := a.db.Query(r.Context(), `SELECT public_id FROM npcs WHERE is_active ORDER BY random() LIMIT 10`)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	defer rows.Close()
+	ids := make([]int64, 0, 10)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			serverError(w, err)
+			return
+		}
+		ids = append(ids, id)
+	}
+	idParts := make([]string, 0, len(ids))
+	for _, id := range ids {
+		idParts = append(idParts, fmt.Sprintf("%d", id))
+	}
+	prompt := "请根据这些NPC ID生成关卡数据，只输出JSON数组，格式必须为[{\"npc_id\":id,\"message\":\"发言内容\"},{\"npc_id\":id,\"message\":\"发言内容\"}]。npc_id必须来自给定列表，message不能为空字符串，至少2条消息。"
+	write(w, 200, map[string]any{"npc_ids": ids, "npc_ids_text": strings.Join(idParts, ","), "editor_prompt": prompt})
+}
+
 func (a *app) createLevelSubmission(w http.ResponseWriter, r *http.Request) {
 	pid, ok := a.playerID(w, r)
 	if !ok {
@@ -534,12 +570,67 @@ func (a *app) createLevelSubmission(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
-	if strings.TrimSpace(in.Name) == "" || strings.TrimSpace(in.Description) == "" {
-		fail(w, 400, "name and description are required")
+	name := strings.TrimSpace(in.Name)
+	description := strings.TrimSpace(in.Description)
+	payload := strings.TrimSpace(in.Payload)
+	if name == "" || description == "" || payload == "" {
+		fail(w, 400, "关卡名称、玩法说明和关卡数据不能为空")
+		return
+	}
+	fingerprintID := strings.TrimSpace(r.Header.Get("X-Device-Fingerprint"))
+	if blocked, err := a.isFingerprintBlacklisted(r.Context(), fingerprintID); err != nil {
+		serverError(w, err)
+		return
+	} else if blocked {
+		fail(w, 403, "不符合提交要求")
+		return
+	}
+	if blocked, err := a.isIPBlacklisted(r.Context(), requestIP(r)); err != nil {
+		serverError(w, err)
+		return
+	} else if blocked {
+		fail(w, 403, "不符合提交要求")
+		return
+	}
+	rateKey := "level-submit:rate:" + pid
+	if count, err := a.redis.Incr(r.Context(), rateKey).Result(); err != nil {
+		serverError(w, err)
+		return
+	} else {
+		if count == 1 {
+			_ = a.redis.Expire(r.Context(), rateKey, time.Minute).Err()
+		}
+		if count > 3 {
+			fail(w, 429, "提交过于频繁")
+			return
+		}
+	}
+	payloadHash := sha256.Sum256([]byte(pid + "\n" + payload))
+	replayKey := "level-submit:replay:" + hex.EncodeToString(payloadHash[:])
+	if ok, err := a.redis.SetNX(r.Context(), replayKey, "1", 30*time.Minute).Result(); err != nil {
+		serverError(w, err)
+		return
+	} else if !ok {
+		fail(w, 409, "请勿重复提交")
+		return
+	}
+	messages, err := validateLevelPayload(payload)
+	if err != nil {
+		fail(w, 400, "关卡数据格式不符合要求")
+		return
+	}
+	normalized, _ := json.Marshal(messages)
+	var existing bool
+	if err := a.db.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM level_submissions WHERE player_id=$1 AND payload=$2)`, pid, string(normalized)).Scan(&existing); err != nil {
+		serverError(w, err)
+		return
+	}
+	if existing {
+		fail(w, 409, "请勿重复提交")
 		return
 	}
 	var id string
-	err := a.db.QueryRow(r.Context(), `INSERT INTO level_submissions(player_id,name,description,payload) VALUES($1,$2,$3,$4) RETURNING id`, pid, in.Name, in.Description, in.Payload).Scan(&id)
+	err = a.db.QueryRow(r.Context(), `INSERT INTO level_submissions(player_id,name,description,payload) VALUES($1,$2,$3,$4) RETURNING id`, pid, name, description, string(normalized)).Scan(&id)
 	if err != nil {
 		serverError(w, err)
 		return
@@ -609,6 +700,35 @@ func normalizeTelegramUsername(value string) string {
 	return "@" + value
 }
 
+func validateLevelPayload(payload string) ([]levelMessage, error) {
+	var raw []levelMessage
+	if err := json.Unmarshal([]byte(payload), &raw); err != nil {
+		return nil, err
+	}
+	if len(raw) < 2 || len(raw) > 100 {
+		return nil, errors.New("invalid message count")
+	}
+	out := make([]levelMessage, 0, len(raw))
+	for _, item := range raw {
+		id := item.NPCID
+		if id == 0 {
+			id = item.SendID
+		}
+		message := strings.TrimSpace(item.Message)
+		if message == "" {
+			message = strings.TrimSpace(item.Text)
+		}
+		if message == "" {
+			message = strings.TrimSpace(item.LegacyText)
+		}
+		if id < 0 || message == "" || len([]rune(message)) > 500 {
+			return nil, errors.New("invalid message")
+		}
+		out = append(out, levelMessage{NPCID: id, SendID: id, Message: message, Text: message, Reportable: item.Reportable})
+	}
+	return out, nil
+}
+
 func reservedNPCUsernameFallback(value string) bool {
 	switch strings.ToLower(normalizeTelegramUsername(value)) {
 	case "@xiaohai", "@thisisabot":
@@ -637,6 +757,12 @@ func (a *app) isTGBlacklisted(ctx context.Context, tgID string) (bool, error) {
 func (a *app) isFingerprintBlacklisted(ctx context.Context, fingerprintID string) (bool, error) {
 	var blocked bool
 	err := a.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM fingerprint_blacklist WHERE fingerprint_id=$1)`, strings.TrimSpace(fingerprintID)).Scan(&blocked)
+	return blocked, err
+}
+
+func (a *app) isIPBlacklisted(ctx context.Context, ip string) (bool, error) {
+	var blocked bool
+	err := a.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM ip_blacklist WHERE ip=$1)`, strings.TrimSpace(ip)).Scan(&blocked)
 	return blocked, err
 }
 

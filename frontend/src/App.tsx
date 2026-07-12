@@ -42,6 +42,7 @@ type LevelScript = {
   npc_photo: Record<number, string>;
   messages: LevelScriptMessage[];
 };
+type LevelSubmissionMeta = { npc_ids: number[]; npc_ids_text: string; editor_prompt: string };
 type PreparedFingerprint = {
   fingerprint: Awaited<ReturnType<typeof collectRelayFingerprint>>;
   webrtcIps: string[];
@@ -172,17 +173,7 @@ const groups: ChatGroup[] = [
     tag: "创作中心",
     color: "yellow",
     preview: "提交你的原创群聊挑战",
-    messages: [
-      {
-        id: "level-01",
-        sender: "关卡编辑器",
-        avatar: "关",
-        tone: "bot",
-        isBot: true,
-        text: "写下关卡名称、玩法说明和关卡数据，即可提交审核。",
-        time: "09:31",
-      },
-    ],
+    messages: [],
   },
 ];
 
@@ -235,6 +226,7 @@ export default function Home() {
   const levelTimers = useRef<number[]>([]);
   const [npcs, setNpcs] = useState<NPC[]>(fallbackNPCs);
   const [levelTags, setLevelTags] = useState<Record<string, string>>({});
+  const [levelSubmissionMeta, setLevelSubmissionMeta] = useState<LevelSubmissionMeta | null>(null);
   const [achievements, setAchievements] = useState<Achievement[]>([]);
   const [npcForm, setNpcForm] = useState({ name: "", tg_username: "", description: "", avatar_url: "", extracted_data: {} as Record<string, unknown> });
   const [npcEditable, setNpcEditable] = useState(false);
@@ -245,7 +237,17 @@ export default function Home() {
     () => groups.find((group) => group.id === activeGroupId) ?? groups[0],
     [activeGroupId],
   );
-  const activeMessages = [...activeGroup.messages, ...(addedMessages[activeGroup.id] ?? [])];
+  const levelSubmitMessages: ChatMessage[] = useMemo(() => {
+    if (!levelSubmissionMeta) return [
+      { id: "level-loading", sender: "关卡编辑器", avatar: "关", tone: "bot", isBot: true, text: "正在获取可用NPC列表…", time: "刚刚" },
+    ];
+    return [
+      { id: "level-npcs", sender: "随机NPC发言", avatar: "随", tone: "mint", text: levelSubmissionMeta.npc_ids_text || "暂无可用NPC", time: "刚刚" },
+      { id: "level-editor", sender: "关卡编辑器", avatar: "关", tone: "bot", isBot: true, text: levelSubmissionMeta.editor_prompt, time: "刚刚" },
+    ];
+  }, [levelSubmissionMeta]);
+  const baseMessages = activeGroup.id === "level-submit" ? levelSubmitMessages : activeGroup.messages;
+  const activeMessages = [...baseMessages, ...(addedMessages[activeGroup.id] ?? [])];
   const browserTime = browserNow.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
   const browserWeekday = browserNow.toLocaleDateString("zh-CN", { weekday: "long" });
   const authHeaders = useMemo(() => ({ Authorization: `Bearer ${sessionToken}`, "X-Device-Fingerprint": fingerprintId, "X-Miniapp-ID": miniappId }), [sessionToken, fingerprintId, miniappId]);
@@ -389,6 +391,15 @@ export default function Home() {
   }, [activeGroupId, playerId, authHeaders]);
 
   useEffect(() => {
+    if (activeGroupId !== "level-submit" || !playerId) return;
+    setLevelSubmissionMeta(null);
+    fetch(`${API_URL}/api/v1/level-submissions/meta`, { headers: authHeaders })
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error("meta failed")))
+      .then((data: LevelSubmissionMeta) => setLevelSubmissionMeta(data))
+      .catch(() => setLevelSubmissionMeta({ npc_ids: [], npc_ids_text: "", editor_prompt: "请稍后重试。" }));
+  }, [activeGroupId, playerId, authHeaders]);
+
+  useEffect(() => {
     if (view !== "chat" || !authHeaders.Authorization || !["night-watch", "station"].includes(activeGroupId)) return;
     let cancelled = false;
     fetch(`${API_URL}/api/v1/levels?group_id=${encodeURIComponent(activeGroupId)}`, { headers: authHeaders })
@@ -500,14 +511,33 @@ export default function Home() {
     setFormStatus("已获取当前TG用户信息，现在可以修改名称、用户名和备注");
   };
 
+  const validateLevelPayload = () => {
+    let parsed: unknown;
+    try { parsed = JSON.parse(levelForm.payload); } catch { return ""; }
+    if (!Array.isArray(parsed) || parsed.length < 2) return "";
+    const allowed = new Set(levelSubmissionMeta?.npc_ids ?? []);
+    const normalized = parsed.map((item) => {
+      if (!item || typeof item !== "object") throw new Error("invalid");
+      const row = item as { npc_id?: unknown; message?: unknown };
+      if (typeof row.npc_id !== "number" || !Number.isInteger(row.npc_id)) throw new Error("invalid");
+      if (allowed.size > 0 && !allowed.has(row.npc_id)) throw new Error("invalid");
+      if (typeof row.message !== "string" || !row.message.trim()) throw new Error("invalid");
+      return { npc_id: row.npc_id, message: row.message.trim() };
+    });
+    return JSON.stringify(normalized);
+  };
+
   const submitLevel = async () => {
     if (!playerId || !levelForm.name.trim() || !levelForm.description.trim()) { setFormStatus("请填写关卡名称和玩法说明，并确认后端已连接"); return; }
+    let normalizedPayload = "";
+    try { normalizedPayload = validateLevelPayload(); } catch { normalizedPayload = ""; }
+    if (!normalizedPayload) { setFormStatus("关卡数据格式不符合要求"); return; }
     try {
-      const response = await fetch(`${API_URL}/api/v1/level-submissions`, { method: "POST", headers: { "Content-Type": "application/json", ...authHeaders }, body: JSON.stringify(levelForm) });
-      if (!response.ok) throw new Error("submit failed");
+      const response = await fetch(`${API_URL}/api/v1/level-submissions`, { method: "POST", headers: { "Content-Type": "application/json", ...authHeaders }, body: JSON.stringify({ ...levelForm, payload: normalizedPayload }) });
+      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error ?? "submit failed");
       setLevelForm({ name: "", description: "", payload: "" });
       setFormStatus("关卡已提交，等待审核");
-    } catch { setFormStatus("提交失败，请稍后重试"); }
+    } catch (error) { setFormStatus(error instanceof Error ? error.message : "提交失败，请稍后重试"); }
   };
 
   const submitMessage = () => {
@@ -787,7 +817,7 @@ export default function Home() {
                 <div className="portal-form compact-form">
                   <label>关卡名称<input value={levelForm.name} onChange={(event) => setLevelForm({ ...levelForm, name: event.target.value })} placeholder="例如：深夜求节点" /></label>
                   <label>玩法说明<textarea value={levelForm.description} onChange={(event) => setLevelForm({ ...levelForm, description: event.target.value })} placeholder="玩家要找出哪条消息？如何通关？" /></label>
-                  <label>关卡数据（可选）<textarea value={levelForm.payload} onChange={(event) => setLevelForm({ ...levelForm, payload: event.target.value })} placeholder="对话脚本或 JSON 数据" /></label>
+                  <label>关卡数据<textarea value={levelForm.payload} onChange={(event) => setLevelForm({ ...levelForm, payload: event.target.value })} placeholder='[{"npc_id":9478,"message":"有没有腾讯云节点"}]' /></label>
                   <button onClick={submitLevel}>提交关卡</button>
                   {formStatus && <p className="form-status">{formStatus}</p>}
                 </div>
