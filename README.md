@@ -1,98 +1,134 @@
-# vinext-starter
+# 抓小孩 Telegram Mini App
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+公开仓库：https://github.com/llovely45/zhuaxiaohai
 
-## Prerequisites
+项目采用前后端分离部署：
 
-- Node.js `>=22.13.0`
+```text
+frontend/            React + Vite纯静态前端，部署到Cloudflare Pages
+backend/             Go API、数据库迁移、OpenAPI和Dockerfile
+docker-compose.yml   VPS上的Go + PostgreSQL + Redis
+```
 
-## Quick Start
+## Cloudflare Pages部署
+
+在Cloudflare Pages连接本仓库，并填写：
+
+```text
+Root directory: frontend
+Build command: npm run build
+Build output directory: dist
+```
+
+添加构建环境变量：
+
+```text
+VITE_API_URL=https://api.example.com
+```
+
+将其替换为VPS后端的HTTPS域名，然后重新部署。Pages提供的HTTPS地址可以直接填写到 BotFather 的 Mini App URL。
+
+也可以手动部署：
 
 ```bash
-npm install
+cd frontend
+npm ci
+VITE_API_URL=https://api.example.com npm run build
+npx wrangler pages deploy dist --project-name zhuaxiaohai
+```
+
+## VPS使用源码部署
+
+```bash
+git clone https://github.com/llovely45/zhuaxiaohai.git
+cd zhuaxiaohai
+cp .env.example .env
+nano .env
+docker compose up -d --build
+```
+
+`.env`中必须设置：
+
+```env
+POSTGRES_DB=zhuaxiaohai
+POSTGRES_USER=game
+POSTGRES_PASSWORD=请替换成长随机密码
+REDIS_PASSWORD=请替换成另一个长随机密码
+TELEGRAM_BOT_TOKEN=从BotFather获取的Token
+CORS_ORIGIN=https://你的项目.pages.dev
+API_BIND=127.0.0.1
+```
+
+后端默认只监听 `127.0.0.1:8080`。使用Nginx或Caddy反向代理到 `https://api.example.com`，不要把PostgreSQL或Redis端口暴露到公网。
+
+## VPS直接拉取GHCR镜像
+
+公开镜像：
+
+```text
+ghcr.io/llovely45/zhuaxiaohai-api:latest
+```
+
+无需在VPS本地编译Go镜像：
+
+```bash
+git clone https://github.com/llovely45/zhuaxiaohai.git
+cd zhuaxiaohai
+cp .env.example .env
+nano .env
+docker compose pull api
+docker compose up -d --no-build
+```
+
+更新版本：
+
+```bash
+git pull
+docker compose pull api
+docker compose up -d --no-build
+```
+
+查看状态和日志：
+
+```bash
+docker compose ps
+docker compose logs -f api
+curl http://127.0.0.1:8080/healthz
+```
+
+数据库迁移会在API启动前自动执行，PostgreSQL和Redis数据保存在Docker volumes中。不要使用 `docker compose down -v`，除非确定要删除全部数据。
+
+## Telegram Mini App接口
+
+前端已接入 Telegram Web App SDK，包括 `ready()`、`expand()`、安全区、主题、平台、启动参数和 `initData`。后端通过 `TELEGRAM_BOT_TOKEN` 验证签名，以验证后的TG用户ID为准，并签发Redis会话令牌。
+
+主要接口：
+
+- `POST /api/v1/telegram/session`
+- `GET /api/v1/me`
+- `POST /api/v1/telegram/events`
+- `POST /api/v1/telegram/extract-profile`
+- `GET /api/v1/npcs`
+- `POST /api/v1/npc-applications`
+- `GET /api/v1/achievements`
+- `POST /api/v1/level-submissions`
+
+完整定义见 [`backend/openapi.yaml`](backend/openapi.yaml)。
+
+## 本地开发与检查
+
+前端：
+
+```bash
+cd frontend
+npm ci
 npm run dev
-npm run build
 ```
 
-This starter does not use `wrangler.jsonc`.
+检查构建：
 
-## Included Shape
-
-- edit site code under `app/`
-- `.openai/hosting.json` declares optional Sites D1 and R2 bindings
-- `vite.config.ts` simulates declared bindings for local development
-- `db/schema.ts` starts intentionally empty
-- `examples/d1/` contains an optional D1 example surface
-- `drizzle.config.ts` supports local migration generation when needed
-
-## Workspace Auth Headers
-
-OpenAI workspace sites can read the current user's email from
-`oai-authenticated-user-email`.
-
-SIWC-authenticated workspace sites may also receive
-`oai-authenticated-user-full-name` when the user's SIWC profile has a non-empty
-`name` claim. The full-name value is percent-encoded UTF-8 and is accompanied by
-`oai-authenticated-user-full-name-encoding: percent-encoded-utf-8`.
-
-Treat the full name as optional and fall back to email when it is absent:
-
-```tsx
-import { headers } from "next/headers";
-
-export default async function Home() {
-  const requestHeaders = await headers();
-  const email = requestHeaders.get("oai-authenticated-user-email");
-  const encodedFullName = requestHeaders.get("oai-authenticated-user-full-name");
-  const fullName =
-    encodedFullName &&
-    requestHeaders.get("oai-authenticated-user-full-name-encoding") ===
-      "percent-encoded-utf-8"
-      ? decodeURIComponent(encodedFullName)
-      : null;
-
-  const displayName = fullName ?? email;
-  // ...
-}
+```bash
+cd frontend && npm run build
+cd ../backend && go test ./...
+docker compose config
 ```
-
-## Optional Dispatch-Owned ChatGPT Sign-In
-
-Import the ready-to-use helpers from `app/chatgpt-auth.ts` when the site needs
-optional or required ChatGPT sign-in:
-
-- Use `getChatGPTUser()` for optional signed-in UI.
-- Use `requireChatGPTUser(returnTo)` for server-rendered pages that should send
-  anonymous visitors through Sign in with ChatGPT.
-- Use `chatGPTSignInPath(returnTo)` and `chatGPTSignOutPath(returnTo)` for
-  browser links or actions.
-- Pass a same-origin relative `returnTo` path for the destination after sign-in
-  or sign-out. The helper validates and safely encodes it.
-- Mark protected pages with `export const dynamic = "force-dynamic"` because
-  they depend on per-request identity headers.
-
-Dispatch owns `/signin-with-chatgpt`, `/signout-with-chatgpt`, `/callback`, the
-OAuth cookies, and identity header injection. Do not implement app routes for
-those reserved paths. Routes that do not import and call the helper remain
-anonymous-compatible.
-
-SIWC establishes identity only; it does not prove workspace membership. Use the
-Sites hosting platform's access policy controls for workspace-wide restrictions,
-or enforce explicit server-side membership or allowlist checks.
-
-Use SIWC for account pages, user-specific dashboards, saved records, and write
-actions tied to the current ChatGPT user. Leave public content anonymous.
-
-## Useful Commands
-
-- `npm run dev`: start local development
-- `npm run build`: verify the vinext build output
-- `npm test`: build the starter and verify its rendered loading skeleton
-- `npm run db:generate`: generate Drizzle migrations after schema changes
-
-## Learn More
-
-- [vinext Documentation](https://github.com/cloudflare/vinext)
-- [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)

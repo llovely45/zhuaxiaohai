@@ -1,0 +1,60 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-zhuaxiaohai}
+      POSTGRES_USER: ${POSTGRES_USER:-game}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在.env中设置POSTGRES_PASSWORD}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-game} -d ${POSTGRES_DB:-zhuaxiaohai}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?请在.env中设置REDIS_PASSWORD}"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a '${REDIS_PASSWORD}' ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-zhuaxiaohai}
+      POSTGRES_USER: ${POSTGRES_USER:-game}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      DATABASE_URL: postgres://${POSTGRES_USER:-game}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-zhuaxiaohai}?sslmode=disable
+    volumes:
+      - ./backend/migrations:/migrations:ro
+    command: ["sh", "/migrations/migrate.sh"]
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  api:
+    image: ghcr.io/llovely45/zhuaxiaohai-api:latest
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-game}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-zhuaxiaohai}?sslmode=disable
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      CORS_ORIGIN: ${CORS_ORIGIN:?请设置Cloudflare Pages正式域名}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?请设置Telegram机器人Token}
+    ports:
+      - "${API_BIND:-127.0.0.1}:8080:8080"
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+
+volumes:
+  pg_data:
+  redis_data:
