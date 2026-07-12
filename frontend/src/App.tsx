@@ -204,17 +204,6 @@ function PaperBot() {
   );
 }
 
-function formatTimer(seconds: number) {
-  const total = Math.max(0, seconds);
-  const minutes = Math.floor(total / 60);
-  const displaySeconds = Math.floor(total % 60);
-  const centiseconds = Math.floor((total * 100) % 100);
-  return `${String(minutes).padStart(2, "0")}:${String(displaySeconds).padStart(
-    2,
-    "0",
-  )}.${String(centiseconds).padStart(2, "0")}`;
-}
-
 async function browserFingerprint() {
   const details = {
     userAgent: navigator.userAgent,
@@ -236,8 +225,6 @@ export default function Home() {
   const [mobilePane, setMobilePane] = useState<MobilePane>("groups");
   const [quotedId, setQuotedId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
-  const [startedAt, setStartedAt] = useState<number | null>(null);
-  const [elapsed, setElapsed] = useState(0);
   const [completed, setCompleted] = useState(false);
   const [isBanned, setIsBanned] = useState(false);
   const [addedMessages, setAddedMessages] = useState<Record<string, ChatMessage[]>>({});
@@ -276,14 +263,6 @@ export default function Home() {
     }, 1350);
     return () => window.clearTimeout(nextScreen);
   }, [view]);
-
-  useEffect(() => {
-    if (!startedAt || completed) return;
-    const clock = window.setInterval(() => {
-      setElapsed((Date.now() - startedAt) / 1000);
-    }, 40);
-    return () => window.clearInterval(clock);
-  }, [completed, startedAt]);
 
   useEffect(() => {
     if (view !== "chat" && view !== "npc") return;
@@ -339,8 +318,7 @@ export default function Home() {
       body: JSON.stringify({ code }),
     });
     void unlock("first-catch");
-    if (elapsed <= 30) void unlock("fast-catch");
-  }, [completed, elapsed, playerId, sessionToken]);
+  }, [completed, playerId, sessionToken]);
 
   useEffect(() => {
     if (activeGroupId !== "paper-club" || !playerId) return;
@@ -359,8 +337,6 @@ export default function Home() {
 
   const startGame = () => {
     if (view !== "home") return;
-    setStartedAt(Date.now());
-    setElapsed(0);
     setView("handoff");
   };
 
@@ -450,7 +426,6 @@ export default function Home() {
         setIsBanned(true);
         setQuotedId(null);
         window.setTimeout(() => {
-          setElapsed(startedAt ? (Date.now() - startedAt) / 1000 : elapsed);
           setCompleted(true);
         }, 820);
       } else {
@@ -473,8 +448,6 @@ export default function Home() {
     setMobilePane("groups");
     setQuotedId(null);
     setDraft("");
-    setStartedAt(null);
-    setElapsed(0);
     setCompleted(false);
     setIsBanned(false);
     setAddedMessages({});
@@ -579,18 +552,6 @@ export default function Home() {
 
       {view === "chat" && (
         <section className="chat-stage" aria-label="TeleChat 对话游戏">
-          <header className="task-strip">
-            <div>
-              <span className="task-pin">✦</span>
-              <p>当前任务</p>
-              <strong>引用捣乱消息后发送 /spaw</strong>
-            </div>
-            <div className="timer-card" aria-label={`已用时 ${formatTimer(elapsed)}`}>
-              <span>用时</span>
-              <b>{formatTimer(elapsed)}</b>
-            </div>
-          </header>
-
           <div className="chat-window">
             <aside className={`chat-sidebar${mobilePane === "messages" ? " mobile-hidden" : ""}`}>
               <div className="brand-row">
@@ -781,10 +742,6 @@ export default function Home() {
             <p className="complete-eyebrow">SAFE CHAT MISSION</p>
             <h2>举报成功！</h2>
             <p className="complete-copy">群规机器人已完成处理，并封禁了违规账号。</p>
-            <div className="result-time">
-              <span>本轮用时</span>
-              <strong>{formatTimer(elapsed)}</strong>
-            </div>
             <div className="achievement-row">
               <span>✦ 群规判断</span>
               <span>✓ 正确引用</span>
