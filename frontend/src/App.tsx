@@ -415,20 +415,43 @@ export default function Home() {
     if (!npcEditable) { setFormStatus("请先提取TG数据"); return; }
     if (!playerId || !npcForm.name.trim() || !npcForm.tg_username.trim()) { setFormStatus("请填写名称和TG用户名，并确认后端已连接"); return; }
     try {
-      const response = await fetch(`${API_URL}/api/v1/npc-applications`, { method: "POST", headers: { "Content-Type": "application/json", ...authHeaders }, body: JSON.stringify(npcForm) });
-      if (!response.ok) throw new Error("submit failed");
+      const telegram = getTelegramWebApp();
+      const response = await fetch(`${API_URL}/api/v1/npc-applications`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders },
+        body: JSON.stringify({
+          ...npcForm,
+          tg_init_data: telegram?.initData ?? "",
+          fingerprint_id: fingerprintId,
+          miniapp_id: miniappId,
+        }),
+      });
+      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error ?? "不符合申请要求");
+      const data = await response.json() as { npc?: NPC };
+      if (data.npc) {
+        setNpcs((items) => {
+          const exists = items.some((npc) => npc.tg_username.toLowerCase() === data.npc!.tg_username.toLowerCase());
+          return exists ? items.map((npc) => npc.tg_username.toLowerCase() === data.npc!.tg_username.toLowerCase() ? data.npc! : npc) : [...items, data.npc!];
+        });
+      }
       setNpcForm({ name: "", tg_username: "", description: "", avatar_url: "", extracted_data: {} });
       setNpcEditable(false);
-      setFormStatus("NPC申请已提交，等待审核");
-    } catch { setFormStatus("提交失败，请稍后重试"); }
+      setFormStatus("NPC已添加到系统");
+    } catch { setFormStatus("不符合申请要求"); }
   };
 
   const extractNPCData = () => {
     const telegram = getTelegramWebApp();
     const user = telegram?.initDataUnsafe?.user;
-    if (!sessionToken || !user?.id) { setFormStatus("请从 Telegram Mini App 内打开后再获取"); return; }
+    if (!sessionToken || !user?.id) { setFormStatus("不符合申请要求"); return; }
+    if (!user.username || !user.photo_url) {
+      setNpcEditable(false);
+      setNpcForm({ name: "", tg_username: "", description: "", avatar_url: "", extracted_data: {} });
+      setFormStatus("不符合申请要求");
+      return;
+    }
     const fullName = [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
-    const tgUsername = user.username ? `@${user.username}` : `tg:${user.id}`;
+    const tgUsername = `@${user.username}`;
     const data = {
       id: user.id,
       name: fullName || user.username || String(user.id),
@@ -798,7 +821,7 @@ export default function Home() {
                   <div><strong>{npcForm.name || "等待获取"}</strong><small>{npcForm.tg_username || "点击按钮自动填充"}</small></div>
                 </div>
                 <label>名称<input disabled={!npcEditable} value={npcForm.name} onChange={(event) => setNpcForm({ ...npcForm, name: event.target.value })} placeholder="提取后自动填充" /></label>
-                <label>TG用户名<input disabled={!npcEditable} value={npcForm.tg_username} onChange={(event) => setNpcForm({ ...npcForm, tg_username: event.target.value })} placeholder="提取后自动填充" /></label>
+                <label>TG用户名<input disabled value={npcForm.tg_username} placeholder="自动填充" /></label>
                 <label>备注<textarea disabled={!npcEditable} value={npcForm.description} onChange={(event) => setNpcForm({ ...npcForm, description: event.target.value })} placeholder="有简介则自动填充，可修改" /></label>
                 <button disabled={!npcEditable} onClick={submitNPC}>提交NPC申请</button>
                 {formStatus && <p className="form-status">{formStatus}</p>}

@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 )
@@ -56,6 +57,15 @@ type sessionRecord struct {
 	PlayerID      string `json:"player_id"`
 	FingerprintID string `json:"fingerprint_id"`
 	MiniappID     string `json:"miniapp_id"`
+}
+
+type telegramInitUser struct {
+	ID           json.Number `json:"id"`
+	FirstName    string      `json:"first_name"`
+	LastName     string      `json:"last_name"`
+	Username     string      `json:"username"`
+	PhotoURL     string      `json:"photo_url"`
+	LanguageCode string      `json:"language_code"`
 }
 
 func main() {
@@ -337,24 +347,83 @@ func (a *app) createNPCApplication(w http.ResponseWriter, r *http.Request) {
 		Name          string         `json:"name"`
 		TGUsername    string         `json:"tg_username"`
 		Description   string         `json:"description"`
+		AvatarURL     string         `json:"avatar_url"`
 		ExtractedData map[string]any `json:"extracted_data"`
+		TGInitData    string         `json:"tg_init_data"`
+		FingerprintID string         `json:"fingerprint_id"`
+		MiniappID     string         `json:"miniapp_id"`
 	}
 	if !decode(w, r, &in) {
 		return
 	}
-	if strings.TrimSpace(in.Name) == "" || strings.TrimSpace(in.TGUsername) == "" {
-		fail(w, 400, "name and tg_username are required")
+	if a.botToken == "" || !verifyTelegram(in.TGInitData, a.botToken) {
+		fail(w, 403, "不符合申请要求")
 		return
 	}
+	tgUser, ok := telegramUser(in.TGInitData)
+	tgID := tgUser.ID.String()
+	tgUsername := normalizeTelegramUsername(tgUser.Username)
+	avatarURL := strings.TrimSpace(tgUser.PhotoURL)
+	if !ok || tgID == "" || tgUsername == "" || avatarURL == "" {
+		fail(w, 403, "不符合申请要求")
+		return
+	}
+	if !hmac.Equal([]byte(strings.TrimSpace(in.FingerprintID)), []byte(r.Header.Get("X-Device-Fingerprint"))) || !hmac.Equal([]byte(strings.TrimSpace(in.MiniappID)), []byte(r.Header.Get("X-Miniapp-ID"))) || !hmac.Equal([]byte(strings.TrimSpace(in.MiniappID)), []byte(tgID)) {
+		fail(w, 403, "不符合申请要求")
+		return
+	}
+	if blocked, err := a.isTGBlacklisted(r.Context(), tgID); err != nil {
+		serverError(w, err)
+		return
+	} else if blocked {
+		fail(w, 403, "不符合申请要求")
+		return
+	}
+	if blocked, err := a.isFingerprintBlacklisted(r.Context(), in.FingerprintID); err != nil {
+		serverError(w, err)
+		return
+	} else if blocked {
+		fail(w, 403, "不符合申请要求")
+		return
+	}
+
+	name := strings.TrimSpace(in.Name)
+	if name == "" {
+		name = strings.TrimSpace(tgUser.FirstName + " " + tgUser.LastName)
+	}
+	if name == "" {
+		name = strings.TrimPrefix(tgUsername, "@")
+	}
+	description := strings.TrimSpace(in.Description)
+	if in.ExtractedData == nil {
+		in.ExtractedData = map[string]any{}
+	}
+	in.ExtractedData["verified_tg_id"] = tgID
+	in.ExtractedData["verified_tg_username"] = tgUsername
+	in.ExtractedData["verified_avatar_url"] = avatarURL
+	in.ExtractedData["source"] = "telegram-miniapp"
 	var id string
 	extracted, _ := json.Marshal(in.ExtractedData)
-	err := a.db.QueryRow(r.Context(), `INSERT INTO npc_applications(player_id,name,persona,tg_username,description,extracted_data) VALUES($1,$2,$3,$4,$5,$6) RETURNING id`, pid, in.Name, in.Description, in.TGUsername, in.Description, extracted).Scan(&id)
+	err := a.db.QueryRow(r.Context(), `INSERT INTO npc_applications(player_id,name,persona,tg_username,description,extracted_data,status) VALUES($1,$2,$3,$4,$5,$6,'approved') RETURNING id`, pid, name, description, tgUsername, description, extracted).Scan(&id)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	var existingID string
+	var npcPublicID int64
+	var npcName, npcUsername, npcDescription, npcAvatar string
+	err = a.db.QueryRow(r.Context(), `SELECT id FROM npcs WHERE lower(tg_username)=lower($1) LIMIT 1`, tgUsername).Scan(&existingID)
+	if err == nil {
+		err = a.db.QueryRow(r.Context(), `UPDATE npcs SET avatar_url=$1, description=$2, is_active=true WHERE id=$3 RETURNING public_id,name,tg_username,description,avatar_url`, avatarURL, description, existingID).Scan(&npcPublicID, &npcName, &npcUsername, &npcDescription, &npcAvatar)
+	} else if errors.Is(err, pgx.ErrNoRows) {
+		err = a.db.QueryRow(r.Context(), `INSERT INTO npcs(name,tg_username,description,avatar_url,rarity,sort_order,is_active) VALUES($1,$2,$3,$4,'普通',100,true) RETURNING public_id,name,tg_username,description,avatar_url`, uniqueNPCName(r.Context(), a.db, name, tgUsername), tgUsername, description, avatarURL).Scan(&npcPublicID, &npcName, &npcUsername, &npcDescription, &npcAvatar)
+	}
 	if err != nil {
 		serverError(w, err)
 		return
 	}
 	_, _ = a.db.Exec(r.Context(), `INSERT INTO player_achievements(player_id,achievement_id) SELECT $1,id FROM achievements WHERE code='npc-creator' ON CONFLICT DO NOTHING`, pid)
-	write(w, 201, map[string]string{"id": id, "status": "pending"})
+	write(w, 201, map[string]any{"id": id, "status": "approved", "npc": map[string]any{"id": npcPublicID, "name": npcName, "tg_username": npcUsername, "description": npcDescription, "avatar_url": npcAvatar}})
 }
 
 func (a *app) listAchievements(w http.ResponseWriter, r *http.Request) {
@@ -461,6 +530,59 @@ func telegramUserID(raw string) string {
 		return ""
 	}
 	return user.ID.String()
+}
+
+func telegramUser(raw string) (telegramInitUser, bool) {
+	values, err := url.ParseQuery(raw)
+	if err != nil || values.Get("user") == "" {
+		return telegramInitUser{}, false
+	}
+	var user telegramInitUser
+	if err := json.Unmarshal([]byte(values.Get("user")), &user); err != nil {
+		return telegramInitUser{}, false
+	}
+	return user, user.ID.String() != ""
+}
+
+func normalizeTelegramUsername(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.TrimPrefix(value, "@")
+	if value == "" {
+		return ""
+	}
+	return "@" + value
+}
+
+func (a *app) isTGBlacklisted(ctx context.Context, tgID string) (bool, error) {
+	var blocked bool
+	err := a.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM tg_blacklist WHERE tg_user_id=$1)`, tgID).Scan(&blocked)
+	return blocked, err
+}
+
+func (a *app) isFingerprintBlacklisted(ctx context.Context, fingerprintID string) (bool, error) {
+	var blocked bool
+	err := a.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM fingerprint_blacklist WHERE fingerprint_id=$1)`, strings.TrimSpace(fingerprintID)).Scan(&blocked)
+	return blocked, err
+}
+
+func uniqueNPCName(ctx context.Context, db *pgxpool.Pool, name, tgUsername string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "新NPC"
+	}
+	var exists bool
+	if err := db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM npcs WHERE name=$1)`, name).Scan(&exists); err != nil || !exists {
+		return name
+	}
+	suffix := strings.TrimPrefix(normalizeTelegramUsername(tgUsername), "@")
+	if suffix == "" {
+		suffix = fmt.Sprintf("%d", time.Now().Unix())
+	}
+	candidate := name + "-" + suffix
+	if err := db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM npcs WHERE name=$1)`, candidate).Scan(&exists); err != nil || !exists {
+		return candidate
+	}
+	return fmt.Sprintf("%s-%d", name, time.Now().Unix())
 }
 
 func (a *app) verifyTurnstile(ctx context.Context, token, remoteIP string) (bool, error) {

@@ -34,7 +34,7 @@ paths:
       responses: { "202": { description: 已接收 } }
   /telegram/extract-profile:
     post:
-      summary: 根据TG用户名提取可访问的名称、用户名和简介
+      summary: 兼容旧版：根据TG用户名提取可访问的名称、用户名和简介
       security: [{ bearerAuth: [], fingerprint: [], miniappId: [] }]
       responses:
         "200": { description: 已提取资料，前端可进入编辑状态 }
@@ -46,9 +46,24 @@ paths:
       responses: { "200": { description: NPC列表 } }
   /npc-applications:
     post:
-      summary: 提交NPC申请
+      summary: 提交NPC申请并自动写入系统NPC
       security: [{ bearerAuth: [], fingerprint: [], miniappId: [] }]
-      responses: { "201": { description: 已提交 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, tg_init_data, fingerprint_id, miniapp_id]
+              properties:
+                name: { type: string }
+                description: { type: string }
+                tg_init_data: { type: string, description: Telegram Mini App 原始加密凭证，后端用机器人Token验签 }
+                fingerprint_id: { type: string }
+                miniapp_id: { type: string }
+      responses:
+        "201": { description: 已通过校验并写入系统NPC，返回写入后的NPC数据 }
+        "403": { description: 不符合申请要求 }
   /achievements:
     get:
       summary: 当前玩家成就

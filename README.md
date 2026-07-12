@@ -137,11 +137,18 @@ X-Miniapp-ID: <verified_tg_user_id>
 - `POST /api/v1/telegram/events`
 - `POST /api/v1/telegram/extract-profile`
 - `GET /api/v1/npcs`
-- `POST /api/v1/npc-applications`
+- `POST /api/v1/npc-applications`：提交时必须携带 `tg_init_data`、`fingerprint_id`、`miniapp_id`；后端使用 `TELEGRAM_BOT_TOKEN` 重新验签，只允许有 TG username 和头像、且不在黑名单中的用户写入系统 NPC。同 username 已存在时会替换头像和备注。
 - `GET /api/v1/achievements`
 - `POST /api/v1/level-submissions`
 
 完整定义见 [`backend/openapi.yaml`](backend/openapi.yaml)。
+
+NPC 申请黑名单表：
+
+```sql
+INSERT INTO tg_blacklist(tg_user_id, reason) VALUES ('123456789', 'manual');
+INSERT INTO fingerprint_blacklist(fingerprint_id, reason) VALUES ('abcdef123456abcdef123456', 'manual');
+```
 
 ## 本地开发与检查
 
