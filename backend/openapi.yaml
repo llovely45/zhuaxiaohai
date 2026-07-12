@@ -44,6 +44,18 @@ paths:
       summary: 系统NPC列表
       security: [{ bearerAuth: [], fingerprint: [], miniappId: [] }]
       responses: { "200": { description: NPC列表 } }
+  /levels:
+    get:
+      summary: 获取群聊关卡脚本
+      security: [{ bearerAuth: [], fingerprint: [], miniappId: [] }]
+      parameters:
+        - in: query
+          name: group_id
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: 返回 level_no、npc_id、npc_photo、messages }
+        "404": { description: 关卡不存在 }
   /npc-applications:
     post:
       summary: 提交NPC申请并自动写入系统NPC

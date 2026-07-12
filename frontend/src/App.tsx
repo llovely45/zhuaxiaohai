@@ -8,6 +8,7 @@ type ChatMessage = {
   id: string;
   sender: string;
   avatar: string;
+  avatarUrl?: string;
   tone: "mint" | "pink" | "yellow" | "lilac" | "bot" | "self";
   text: string;
   time: string;
@@ -33,6 +34,14 @@ type NPC = {
   avatar_url: string;
 };
 type Achievement = { code: string; name: string; description: string; unlocked: boolean };
+type LevelScriptMessage = { send_id: number; text?: string; test?: string; reportable?: boolean };
+type LevelScript = {
+  group_id: string;
+  level_no: number;
+  npc_id: number[];
+  npc_photo: Record<number, string>;
+  messages: LevelScriptMessage[];
+};
 type PreparedFingerprint = {
   fingerprint: Awaited<ReturnType<typeof collectRelayFingerprint>>;
   webrtcIps: string[];
@@ -60,62 +69,50 @@ const fallbackNPCs: NPC[] = [
   { id: 1, name: "群规机器人", tg_username: "@thisisabot", description: "负责审核举报、封禁违规账号并发放成就。", avatar_url: "" },
 ];
 
+const npcProfiles: Record<number, { name: string; avatar: string; tone: ChatMessage["tone"] }> = {
+  0: { name: "顶尖哥", avatar: "顶", tone: "mint" },
+  1: { name: "群规机器人", avatar: "安", tone: "bot" },
+  9478: { name: "小孩哥", avatar: "孩", tone: "pink" },
+};
+
+const fallbackLevelNos: Record<string, number> = { "night-watch": 10001, station: 30001 };
+
 function getTelegramWebApp(): TelegramWebApp | undefined {
   return (window as Window & { Telegram?: { WebApp?: TelegramWebApp } }).Telegram?.WebApp;
+}
+
+function levelMessageToChat(level: LevelScript, item: LevelScriptMessage, index: number): ChatMessage {
+  const profile = npcProfiles[item.send_id] ?? { name: `NPC ${item.send_id}`, avatar: "N", tone: "lilac" as ChatMessage["tone"] };
+  return {
+    id: level.group_id === "night-watch" && item.reportable ? "clue-01" : `${level.group_id}-${level.level_no}-${index}`,
+    sender: profile.name,
+    avatar: profile.avatar,
+    avatarUrl: level.npc_photo[item.send_id] || "",
+    tone: profile.tone,
+    isBot: profile.tone === "bot",
+    text: item.text ?? item.test ?? "",
+    time: "刚刚",
+    reportable: item.reportable,
+  };
 }
 
 const groups: ChatGroup[] = [
   {
     id: "night-watch",
     name: "抓小孩",
-    tag: "43 人",
+    tag: `${fallbackLevelNos["night-watch"]} 人`,
     color: "pink",
     preview: "小孩哥：又来问节点了…",
     unread: 2,
-    messages: [
-      {
-        id: "night-01",
-        sender: "群规小卡",
-        avatar: "规",
-        tone: "yellow",
-        text: "群规提醒：不索要代理节点、不刷屏，也不要攻击群友。",
-        time: "09:42",
-      },
-      {
-        id: "clue-01",
-        sender: "小孩哥",
-        avatar: "板",
-        tone: "pink",
-        text: "又有人有能用的代理节点吗？没有就别装懂。",
-        time: "09:43",
-        reportable: true,
-      },
-    ],
+    messages: [],
   },
   {
     id: "station",
     name: "胡说哥传奇",
-    tag: "18 人",
+    tag: `${fallbackLevelNos.station} 人`,
     color: "mint",
-    preview: "今天的纸片徽章已经发放～",
-    messages: [
-      {
-        id: "station-01",
-        sender: "小灯泡",
-        avatar: "灯",
-        tone: "mint",
-        text: "今天的纸片徽章已经发放，记得查看自己的任务板。",
-        time: "09:39",
-      },
-      {
-        id: "station-02",
-        sender: "路牌",
-        avatar: "路",
-        tone: "lilac",
-        text: "群聊提示：不索要或分享代理节点，也不因得不到回复攻击他人。",
-        time: "09:40",
-      },
-    ],
+    preview: "顶尖哥：大家好…",
+    messages: [],
   },
   {
     id: "paper-club",
@@ -214,6 +211,7 @@ function PaperBot() {
 export default function Home() {
   const [view, setView] = useState<View>("home");
   const [activeGroupId, setActiveGroupId] = useState("night-watch");
+  const [levelRequestTick, setLevelRequestTick] = useState(0);
   const [mobilePane, setMobilePane] = useState<MobilePane>("groups");
   const [quotedId, setQuotedId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -234,7 +232,9 @@ export default function Home() {
   const turnstileBox = useRef<HTMLDivElement>(null);
   const turnstileWidget = useRef<string | null>(null);
   const fingerprintStarted = useRef(false);
+  const levelTimers = useRef<number[]>([]);
   const [npcs, setNpcs] = useState<NPC[]>(fallbackNPCs);
+  const [levelTags, setLevelTags] = useState<Record<string, string>>({});
   const [achievements, setAchievements] = useState<Achievement[]>([]);
   const [npcForm, setNpcForm] = useState({ name: "", tg_username: "", description: "", avatar_url: "", extracted_data: {} as Record<string, unknown> });
   const [npcEditable, setNpcEditable] = useState(false);
@@ -249,6 +249,7 @@ export default function Home() {
   const browserTime = browserNow.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
   const browserWeekday = browserNow.toLocaleDateString("zh-CN", { weekday: "long" });
   const authHeaders = useMemo(() => ({ Authorization: `Bearer ${sessionToken}`, "X-Device-Fingerprint": fingerprintId, "X-Miniapp-ID": miniappId }), [sessionToken, fingerprintId, miniappId]);
+  const activeGroupTag = levelTags[activeGroup.id] ?? activeGroup.tag;
 
   useEffect(() => {
     const telegram = getTelegramWebApp();
@@ -387,6 +388,31 @@ export default function Home() {
       .catch(() => setAchievements([]));
   }, [activeGroupId, playerId, authHeaders]);
 
+  useEffect(() => {
+    if (view !== "chat" || !authHeaders.Authorization || !["night-watch", "station"].includes(activeGroupId)) return;
+    let cancelled = false;
+    fetch(`${API_URL}/api/v1/levels?group_id=${encodeURIComponent(activeGroupId)}`, { headers: authHeaders })
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error("level failed")))
+      .then((level: LevelScript) => {
+        if (cancelled) return;
+        setLevelTags((current) => ({ ...current, [level.group_id]: `${level.level_no} 人` }));
+        let elapsed = 0;
+        level.messages.forEach((message, index) => {
+          elapsed += Math.floor(Math.random() * 1000);
+          const timer = window.setTimeout(() => {
+            addMessage(level.group_id, levelMessageToChat(level, message, index));
+          }, elapsed);
+          levelTimers.current.push(timer);
+        });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+      levelTimers.current.forEach((timer) => window.clearTimeout(timer));
+      levelTimers.current = [];
+    };
+  }, [view, activeGroupId, authHeaders, levelRequestTick]);
+
   const addMessage = (groupId: string, message: ChatMessage) => {
     setAddedMessages((current) => ({
       ...current,
@@ -405,6 +431,12 @@ export default function Home() {
       setMobilePane("messages");
       setFormStatus("");
       return;
+    }
+    if (["night-watch", "station"].includes(groupId)) {
+      levelTimers.current.forEach((timer) => window.clearTimeout(timer));
+      levelTimers.current = [];
+      setAddedMessages((current) => ({ ...current, [groupId]: [] }));
+      setLevelRequestTick((value) => value + 1);
     }
     setActiveGroupId(groupId);
     setQuotedId(null);
@@ -700,7 +732,7 @@ export default function Home() {
                 <span className={`group-avatar ${activeGroup.color}`}>{activeGroup.name.slice(0, 1)}</span>
                 <div className="conversation-title">
                   <strong>{activeGroup.name}</strong>
-                  <small>{activeGroup.tag} · {isBanned && activeGroup.id === "night-watch" ? "已处置" : "正在聊天"}</small>
+                  <small>{activeGroupTag} · {isBanned && activeGroup.id === "night-watch" ? "已处置" : "正在聊天"}</small>
                 </div>
                 <div className="header-actions" aria-hidden="true"><span>⌕</span><span>⋯</span></div>
               </header>
@@ -733,7 +765,7 @@ export default function Home() {
                       className={`message-row${isSelf ? " self" : ""}${message.isBot ? " bot-row" : ""}`}
                       key={message.id}
                     >
-                      {!isSelf && <span className={`message-avatar ${message.tone}`}>{message.avatar}</span>}
+                      {!isSelf && <span className={`message-avatar ${message.tone}`}>{message.avatarUrl ? <img src={message.avatarUrl} alt="" /> : message.avatar}</span>}
                       <div className="message-content">
                         {!isSelf && <b className="sender-name">{message.sender}</b>}
                         <button

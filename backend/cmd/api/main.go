@@ -68,6 +68,13 @@ type telegramInitUser struct {
 	LanguageCode string      `json:"language_code"`
 }
 
+type levelMessage struct {
+	SendID     int64  `json:"send_id"`
+	Text       string `json:"text"`
+	LegacyText string `json:"test,omitempty"`
+	Reportable bool   `json:"reportable,omitempty"`
+}
+
 func main() {
 	ctx := context.Background()
 	databaseURL := env("DATABASE_URL", "postgres://game:game@localhost:5432/zhuaxiaohai?sslmode=disable")
@@ -88,6 +95,7 @@ func main() {
 	mux.HandleFunc("GET /api/v1/me", a.me)
 	mux.HandleFunc("POST /api/v1/telegram/events", a.createTelegramEvent)
 	mux.HandleFunc("GET /api/v1/npcs", a.listNPCs)
+	mux.HandleFunc("GET /api/v1/levels", a.getLevel)
 	mux.HandleFunc("POST /api/v1/telegram/extract-profile", a.extractTelegramProfile)
 	mux.HandleFunc("POST /api/v1/npc-applications", a.createNPCApplication)
 	mux.HandleFunc("GET /api/v1/achievements", a.listAchievements)
@@ -232,6 +240,54 @@ func (a *app) listNPCs(w http.ResponseWriter, r *http.Request) {
 		items = append(items, map[string]any{"id": id, "name": name, "tg_username": tgUsername, "description": description, "avatar_url": avatar})
 	}
 	write(w, 200, map[string]any{"items": items})
+}
+
+func (a *app) getLevel(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.playerID(w, r); !ok {
+		return
+	}
+	groupID := strings.TrimSpace(r.URL.Query().Get("group_id"))
+	if groupID == "" {
+		fail(w, 400, "group_id is required")
+		return
+	}
+	var levelNo int64
+	var npcIDs []int32
+	var npcPhotosRaw, messagesRaw []byte
+	err := a.db.QueryRow(r.Context(), `
+		SELECT level_no,npc_ids,npc_photos,messages
+		FROM game_levels
+		WHERE group_id=$1 AND is_active
+		ORDER BY level_no
+		LIMIT 1`, groupID).Scan(&levelNo, &npcIDs, &npcPhotosRaw, &messagesRaw)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			fail(w, 404, "level not found")
+			return
+		}
+		serverError(w, err)
+		return
+	}
+	npcIDsOut := make([]int64, 0, len(npcIDs))
+	for _, id := range npcIDs {
+		npcIDsOut = append(npcIDsOut, int64(id))
+	}
+	var npcPhotos map[string]string
+	if err := json.Unmarshal(npcPhotosRaw, &npcPhotos); err != nil {
+		serverError(w, err)
+		return
+	}
+	var messages []levelMessage
+	if err := json.Unmarshal(messagesRaw, &messages); err != nil {
+		serverError(w, err)
+		return
+	}
+	for i := range messages {
+		if messages[i].Text == "" {
+			messages[i].Text = messages[i].LegacyText
+		}
+	}
+	write(w, 200, map[string]any{"group_id": groupID, "level_no": levelNo, "npc_id": npcIDsOut, "npc_photo": npcPhotos, "messages": messages})
 }
 
 func (a *app) me(w http.ResponseWriter, r *http.Request) {
