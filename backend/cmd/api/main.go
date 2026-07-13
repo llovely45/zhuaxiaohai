@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -320,12 +321,24 @@ func (a *app) createTelegramEvent(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
-	if strings.TrimSpace(in.Event) == "" {
-		fail(w, 400, "event is required")
+	event := strings.TrimSpace(in.Event)
+	if event != "miniapp_opened" {
+		fail(w, 400, "unsupported event")
 		return
 	}
-	payload, _ := json.Marshal(in.Payload)
-	_, err := a.db.Exec(r.Context(), `INSERT INTO miniapp_events(player_id,event,payload) VALUES($1,$2,$3)`, pid, in.Event, payload)
+	path := "/"
+	if rawPath, ok := in.Payload["path"]; ok {
+		path = strings.TrimSpace(fmt.Sprint(rawPath))
+	}
+	if path == "" {
+		path = "/"
+	}
+	if !strings.HasPrefix(path, "/") || len([]rune(path)) > 256 {
+		fail(w, 400, "invalid event payload")
+		return
+	}
+	payload, _ := json.Marshal(map[string]string{"path": path})
+	_, err := a.db.Exec(r.Context(), `INSERT INTO miniapp_events(player_id,event,payload) VALUES($1,$2,$3)`, pid, event, payload)
 	if err != nil {
 		serverError(w, err)
 		return
@@ -475,9 +488,32 @@ func (a *app) createNPCApplication(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err = a.db.QueryRow(r.Context(), `
-		INSERT INTO npc_applications(player_id,name,persona,tg_username,description,extracted_data,status,fingerprint_hash,fingerprint_payload,match_label,match_score)
-		VALUES($1,$2,$3,$4,$5,$6,'pending',$7,$8,$9,$10)
-		RETURNING id`, pid, name, description, tgUsername, description, extracted, fpHash, fpRaw, match.Label, match.Score).Scan(&id)
+		WITH updated AS (
+		  UPDATE npc_applications
+		  SET player_id=$1,
+		      name=$2,
+		      persona=$3,
+		      tg_username=$4,
+		      description=$5,
+		      extracted_data=$6,
+		      fingerprint_hash=$7,
+		      fingerprint_payload=$8,
+		      match_label=$9,
+		      match_score=$10,
+		      created_at=now()
+		  WHERE status='pending'
+		    AND (player_id=$1 OR extracted_data->>'verified_tg_id'=$11)
+		  RETURNING id
+		), inserted AS (
+		  INSERT INTO npc_applications(player_id,name,persona,tg_username,description,extracted_data,status,fingerprint_hash,fingerprint_payload,match_label,match_score)
+		  SELECT $1,$2,$3,$4,$5,$6,'pending',$7,$8,$9,$10
+		  WHERE NOT EXISTS (SELECT 1 FROM updated)
+		  RETURNING id
+		)
+		SELECT id FROM updated
+		UNION ALL
+		SELECT id FROM inserted
+		LIMIT 1`, pid, name, description, tgUsername, description, extracted, fpHash, fpRaw, match.Label, match.Score, tgID).Scan(&id)
 	if err != nil {
 		serverError(w, err)
 		return
@@ -611,6 +647,9 @@ func (a *app) createLevelSubmission(w http.ResponseWriter, r *http.Request) {
 	case "station":
 		name = "胡说哥传奇"
 		description = "满口胡话，假装高手，实际上不懂技术。"
+	default:
+		fail(w, 400, "unsupported group_id")
+		return
 	}
 	payload := strings.TrimSpace(in.Payload)
 	if name == "" || description == "" || payload == "" {
@@ -1266,6 +1305,18 @@ func verifyTelegram(raw, token string) bool {
 		return false
 	}
 	provided := values.Get("hash")
+	if provided == "" {
+		return false
+	}
+	authDate, err := strconv.ParseInt(values.Get("auth_date"), 10, 64)
+	if err != nil || authDate <= 0 {
+		return false
+	}
+	now := time.Now()
+	issuedAt := time.Unix(authDate, 0)
+	if issuedAt.After(now.Add(5*time.Minute)) || now.Sub(issuedAt) > 24*time.Hour {
+		return false
+	}
 	values.Del("hash")
 	parts := make([]string, 0, len(values))
 	for key, vals := range values {
