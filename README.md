@@ -122,7 +122,7 @@ curl http://127.0.0.1:30001/healthz
 
 前端已接入 Telegram Web App SDK，包括 `ready()`、`expand()`、安全区、主题、平台、启动参数和 `initData`。后端通过 `TELEGRAM_BOT_TOKEN` 验证签名，以验证后的TG用户ID为准，并签发Redis会话令牌。
 
-首屏先完成Cloudflare Turnstile验证，并使用与 `llovely45/tg-bot-relay` 相同的OS、CPU、屏幕、字体、Canvas、WebGL、Audio、浏览器和WebRTC信号生成24位SHA-256指纹。会话同时绑定设备指纹与TG Mini App识别码，后续业务请求必须携带：
+首屏先完成Cloudflare Turnstile验证，并使用与 `llovely45/tg-bot-relay` 相同的指纹算法生成24位SHA-256指纹：后端清洗 `publicIpInfo`、`webrtcIpInfos` 与浏览器 `details`，递归按 key 排序后对 JSON 做 SHA-256 并截取前 24 位。会话同时绑定设备指纹与TG Mini App识别码，后续业务请求必须携带：
 
 ```text
 Authorization: Bearer <session_token>

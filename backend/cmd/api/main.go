@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -165,15 +166,14 @@ func (a *app) createSession(w http.ResponseWriter, r *http.Request) {
 		fail(w, 403, "Cloudflare verification failed")
 		return
 	}
-	fingerprintSource := map[string]any{
-		"publicIpInfo":  lookupIPMetadata(r.Context(), requestIP(r)),
-		"webrtcIpInfos": lookupWebRTCMetadata(r.Context(), in.WebRTCIps),
-		"details":       in.Fingerprint,
-	}
-	fp, _ := json.Marshal(fingerprintSource)
+	fingerprintMeta := relayFingerprintMeta(r, lookupIPMetadata(r.Context(), requestIP(r)), lookupWebRTCMetadata(r.Context(), in.WebRTCIps), in.Fingerprint)
+	fp, _ := json.Marshal(fingerprintMeta)
 	tgContext, _ := json.Marshal(in.TGContext)
-	hash := sha256.Sum256(fp)
-	fingerprintID := hex.EncodeToString(hash[:])[:24]
+	fingerprintID, _ := fingerprintMeta["id"].(string)
+	if fingerprintID == "" {
+		fail(w, 400, "fingerprint is required")
+		return
+	}
 	verified := false
 	if a.botToken != "" && in.TGInitData != "" {
 		verified = verifyTelegram(in.TGInitData, a.botToken)
@@ -881,6 +881,148 @@ func validateLevelPayload(payload string) ([]levelSubmissionMessage, error) {
 		out = append(out, levelSubmissionMessage{NPCID: item.NPCID, Message: message})
 	}
 	return out, nil
+}
+
+func relayFingerprintMeta(r *http.Request, publicIPInfo map[string]string, webrtcIPInfos []map[string]string, fingerprint map[string]any) map[string]any {
+	publicInfo := relayIPInfo(publicIPInfo)
+	webrtcInfos := make([]map[string]string, 0, len(webrtcIPInfos))
+	for _, item := range webrtcIPInfos {
+		webrtcInfos = append(webrtcInfos, relayIPInfo(item))
+	}
+	details := relayFingerprintDetails(fingerprint, relaySystemOS(r))
+	payload := stableValue(map[string]any{"publicIpInfo": publicInfo, "webrtcIpInfos": webrtcInfos, "details": details})
+	raw, _ := jsonNoHTMLEscape(payload)
+	sum := sha256.Sum256(raw)
+	return map[string]any{"id": hex.EncodeToString(sum[:])[:24], "publicIpInfo": publicInfo, "webrtcIpInfos": webrtcInfos, "details": details}
+}
+
+func relayFingerprintDetails(fingerprint map[string]any, systemOS string) map[string]any {
+	osName := trimAny(fingerprint["os"])
+	if osName == "" {
+		osName = systemOS
+	}
+	return map[string]any{
+		"os":      osName,
+		"cpu":     objectValue(fingerprint["cpu"]),
+		"screen":  objectValue(fingerprint["screen"]),
+		"fonts":   stringArrayValue(fingerprint["fonts"]),
+		"canvas":  trimAny(fingerprint["canvas"]),
+		"webgl":   objectValue(fingerprint["webgl"]),
+		"audio":   trimAny(fingerprint["audio"]),
+		"browser": objectValue(fingerprint["browser"]),
+	}
+}
+
+func relayIPInfo(value map[string]string) map[string]string {
+	if value == nil {
+		return map[string]string{"ip": "", "asn": "", "organization": ""}
+	}
+	return map[string]string{"ip": strings.TrimSpace(value["ip"]), "asn": strings.TrimSpace(value["asn"]), "organization": strings.TrimSpace(value["organization"])}
+}
+
+func objectValue(value any) map[string]any {
+	if value == nil {
+		return map[string]any{}
+	}
+	if raw, ok := value.(map[string]any); ok {
+		return raw
+	}
+	return map[string]any{}
+}
+
+func stringArrayValue(value any) []string {
+	raw, ok := value.([]any)
+	if !ok {
+		if typed, ok := value.([]string); ok {
+			out := make([]string, 0, len(typed))
+			for _, item := range typed {
+				if trimmed := strings.TrimSpace(item); trimmed != "" {
+					out = append(out, trimmed)
+				}
+			}
+			return out
+		}
+		return []string{}
+	}
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		if trimmed := trimAny(item); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+func trimAny(value any) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
+}
+
+func stableValue(value any) any {
+	switch item := value.(type) {
+	case []any:
+		out := make([]any, 0, len(item))
+		for _, entry := range item {
+			out = append(out, stableValue(entry))
+		}
+		return out
+	case []map[string]string:
+		out := make([]any, 0, len(item))
+		for _, entry := range item {
+			out = append(out, stableValue(entry))
+		}
+		return out
+	case []string:
+		out := make([]any, 0, len(item))
+		for _, entry := range item {
+			out = append(out, entry)
+		}
+		return out
+	case map[string]string:
+		out := make(map[string]any, len(item))
+		for key, entry := range item {
+			out[key] = entry
+		}
+		return stableValue(out)
+	case map[string]any:
+		out := make(map[string]any, len(item))
+		for key, entry := range item {
+			out[key] = stableValue(entry)
+		}
+		return out
+	default:
+		return item
+	}
+}
+
+func relaySystemOS(r *http.Request) string {
+	ua := strings.ToLower(r.UserAgent())
+	switch {
+	case strings.Contains(ua, "android"):
+		return "Android"
+	case strings.Contains(ua, "iphone") || strings.Contains(ua, "ipad") || strings.Contains(ua, "ipod"):
+		return "iOS"
+	case strings.Contains(ua, "windows"):
+		return "Windows"
+	case strings.Contains(ua, "mac os x") || strings.Contains(ua, "macintosh"):
+		return "macOS"
+	case strings.Contains(ua, "linux"):
+		return "Linux"
+	default:
+		return "未知"
+	}
+}
+
+func jsonNoHTMLEscape(value any) ([]byte, error) {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }
 
 func reservedNPCUsernameFallback(value string) bool {

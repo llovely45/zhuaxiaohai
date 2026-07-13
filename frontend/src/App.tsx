@@ -70,7 +70,7 @@ type TelegramWebApp = {
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY ?? "";
-const AUTH_VERSION = "cf-fingerprint-v1";
+const AUTH_VERSION = "cf-fingerprint-relay-v2";
 const fallbackNPCs: NPC[] = [
   { id: 0, name: "顶尖哥", tg_username: "@anlianxiaoliu", description: "他很顶尖。", avatar_url: "" },
   { id: 9478, name: "小孩哥", tg_username: "@xiaohai", description: "到处索要代理节点，要不到就开始嘴硬。", avatar_url: "" },
