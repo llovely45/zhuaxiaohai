@@ -110,6 +110,7 @@ func main() {
 	mux.HandleFunc("POST /api/v1/admin/session", a.createAdminSession)
 	mux.HandleFunc("POST /api/v1/admin/overview", a.adminOverview)
 	mux.HandleFunc("POST /api/v1/admin/fingerprint-labels", a.adminCreateFingerprintLabel)
+	mux.HandleFunc("POST /api/v1/admin/review", a.adminReviewApplication)
 
 	server := &http.Server{Addr: ":" + env("PORT", "8080"), Handler: a.middleware(mux), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
@@ -451,14 +452,6 @@ func (a *app) createNPCApplication(w http.ResponseWriter, r *http.Request) {
 		fail(w, 403, "不符合申请要求")
 		return
 	}
-	if matched, err := a.isFingerprintLabelMatched(r.Context(), pid); err != nil {
-		serverError(w, err)
-		return
-	} else if matched {
-		fail(w, 403, "不符合申请要求")
-		return
-	}
-
 	name := strings.TrimSpace(in.Name)
 	if name == "" {
 		name = strings.TrimSpace(tgUser.FirstName + " " + tgUser.LastName)
@@ -470,26 +463,25 @@ func (a *app) createNPCApplication(w http.ResponseWriter, r *http.Request) {
 	extractedData := map[string]any{"verified_tg_id": tgID, "verified_tg_username": tgUsername, "verified_avatar_url": avatarURL, "source": "telegram-miniapp"}
 	var id string
 	extracted, _ := json.Marshal(extractedData)
-	err := a.db.QueryRow(r.Context(), `INSERT INTO npc_applications(player_id,name,persona,tg_username,description,extracted_data,status) VALUES($1,$2,$3,$4,$5,$6,'approved') RETURNING id`, pid, name, description, tgUsername, description, extracted).Scan(&id)
+	fpHash, fpRaw, err := a.playerFingerprint(r.Context(), pid)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
-	var existingID string
-	var npcPublicID int64
-	var npcName, npcUsername, npcDescription, npcAvatar string
-	err = a.db.QueryRow(r.Context(), `SELECT id FROM npcs WHERE lower(tg_username)=lower($1) LIMIT 1`, tgUsername).Scan(&existingID)
-	if err == nil {
-		err = a.db.QueryRow(r.Context(), `UPDATE npcs SET avatar_url=$1, description=$2, is_active=true WHERE id=$3 RETURNING public_id,name,tg_username,description,avatar_url`, avatarURL, description, existingID).Scan(&npcPublicID, &npcName, &npcUsername, &npcDescription, &npcAvatar)
-	} else if errors.Is(err, pgx.ErrNoRows) {
-		err = a.db.QueryRow(r.Context(), `INSERT INTO npcs(name,tg_username,description,avatar_url,rarity,sort_order,is_active) VALUES($1,$2,$3,$4,'普通',100,true) RETURNING public_id,name,tg_username,description,avatar_url`, uniqueNPCName(r.Context(), a.db, name, tgUsername), tgUsername, description, avatarURL).Scan(&npcPublicID, &npcName, &npcUsername, &npcDescription, &npcAvatar)
-	}
+	match, err := a.bestFingerprintLabelMatchRaw(r.Context(), fpRaw)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
-	_, _ = a.db.Exec(r.Context(), `INSERT INTO player_achievements(player_id,achievement_id) SELECT $1,id FROM achievements WHERE code='npc-creator' ON CONFLICT DO NOTHING`, pid)
-	write(w, 201, map[string]any{"id": id, "status": "approved", "npc": map[string]any{"id": npcPublicID, "name": npcName, "tg_username": npcUsername, "description": npcDescription, "avatar_url": npcAvatar}})
+	err = a.db.QueryRow(r.Context(), `
+		INSERT INTO npc_applications(player_id,name,persona,tg_username,description,extracted_data,status,fingerprint_hash,fingerprint_payload,match_label,match_score)
+		VALUES($1,$2,$3,$4,$5,$6,'pending',$7,$8,$9,$10)
+		RETURNING id`, pid, name, description, tgUsername, description, extracted, fpHash, fpRaw, match.Label, match.Score).Scan(&id)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	write(w, 201, map[string]any{"id": id, "status": "pending"})
 }
 
 func (a *app) listAchievements(w http.ResponseWriter, r *http.Request) {
@@ -597,7 +589,8 @@ func (a *app) createLevelSubmission(w http.ResponseWriter, r *http.Request) {
 	}
 	name := strings.TrimSpace(in.Name)
 	description := strings.TrimSpace(in.Description)
-	switch strings.TrimSpace(in.GroupID) {
+	groupID := strings.TrimSpace(in.GroupID)
+	switch groupID {
 	case "night-watch":
 		name = "抓小孩"
 		description = "心智不成熟，满口胡话，实际上想要凑近乎白嫖代理节点。"
@@ -623,13 +616,6 @@ func (a *app) createLevelSubmission(w http.ResponseWriter, r *http.Request) {
 		return
 	} else if blocked {
 		fail(w, 403, "不符合提交要求")
-		return
-	}
-	if matched, err := a.isFingerprintLabelMatched(r.Context(), pid); err != nil {
-		serverError(w, err)
-		return
-	} else if matched {
-		write(w, 201, map[string]string{"id": "", "status": "pending"})
 		return
 	}
 	rateKey := "level-submit:rate:" + pid
@@ -669,8 +655,21 @@ func (a *app) createLevelSubmission(w http.ResponseWriter, r *http.Request) {
 		fail(w, 409, "请勿重复提交")
 		return
 	}
+	fpHash, fpRaw, err := a.playerFingerprint(r.Context(), pid)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	match, err := a.bestFingerprintLabelMatchRaw(r.Context(), fpRaw)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
 	var id string
-	err = a.db.QueryRow(r.Context(), `INSERT INTO level_submissions(player_id,name,description,payload) VALUES($1,$2,$3,$4) RETURNING id`, pid, name, description, string(normalized)).Scan(&id)
+	err = a.db.QueryRow(r.Context(), `
+		INSERT INTO level_submissions(player_id,name,description,payload,group_id,fingerprint_hash,fingerprint_payload,match_label,match_score)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		RETURNING id`, pid, name, description, string(normalized), groupID, fpHash, fpRaw, match.Label, match.Score).Scan(&id)
 	if err != nil {
 		serverError(w, err)
 		return
@@ -809,6 +808,228 @@ func (a *app) adminCreateFingerprintLabel(w http.ResponseWriter, r *http.Request
 	write(w, 200, map[string]any{"ok": true, "label_name": labelName, "fingerprint_id": fingerprintID, "rules": rules})
 }
 
+func (a *app) adminReviewApplication(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		TGInitData    string `json:"tg_init_data"`
+		TGUsername    string `json:"tg_username"`
+		FingerprintID string `json:"fingerprint_id"`
+		MiniappID     string `json:"miniapp_id"`
+		Type          string `json:"type"`
+		ID            string `json:"id"`
+		Action        string `json:"action"`
+		LabelName     string `json:"label_name"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	if _, ok := a.adminUser(w, r, adminAuthRequest{TGInitData: in.TGInitData, TGUsername: in.TGUsername, FingerprintID: in.FingerprintID, MiniappID: in.MiniappID}); !ok {
+		return
+	}
+	itemType := strings.TrimSpace(in.Type)
+	id := strings.TrimSpace(in.ID)
+	action := strings.TrimSpace(in.Action)
+	if itemType == "" || id == "" || action == "" {
+		fail(w, 400, "type, id and action are required")
+		return
+	}
+	switch action {
+	case "approve":
+		if itemType == "npc" {
+			if err := a.approveNPCApplication(r.Context(), id); err != nil {
+				serverError(w, err)
+				return
+			}
+		} else if itemType == "level" {
+			if err := a.approveLevelSubmission(r.Context(), id); err != nil {
+				serverError(w, err)
+				return
+			}
+		} else {
+			fail(w, 400, "unsupported type")
+			return
+		}
+	case "ignore":
+		if err := a.deleteReviewApplication(r.Context(), itemType, id); err != nil {
+			serverError(w, err)
+			return
+		}
+	case "mark":
+		labelName := strings.TrimSpace(in.LabelName)
+		if labelName == "" {
+			fail(w, 400, "label_name is required")
+			return
+		}
+		if err := a.markReviewApplication(r.Context(), itemType, id, labelName); err != nil {
+			serverError(w, err)
+			return
+		}
+	default:
+		fail(w, 400, "unsupported action")
+		return
+	}
+	write(w, 200, map[string]any{"ok": true})
+}
+
+func (a *app) approveNPCApplication(ctx context.Context, id string) error {
+	var playerID, name, tgUsername, description string
+	var extractedRaw []byte
+	err := a.db.QueryRow(ctx, `
+		SELECT player_id::text,name,tg_username,description,extracted_data
+		FROM npc_applications WHERE id=$1`, id).Scan(&playerID, &name, &tgUsername, &description, &extractedRaw)
+	if err != nil {
+		return err
+	}
+	var extracted map[string]any
+	_ = json.Unmarshal(extractedRaw, &extracted)
+	avatarURL := strings.TrimSpace(fmt.Sprint(extracted["verified_avatar_url"]))
+	var existingID string
+	err = a.db.QueryRow(ctx, `SELECT id FROM npcs WHERE lower(tg_username)=lower($1) LIMIT 1`, tgUsername).Scan(&existingID)
+	if err == nil {
+		_, err = a.db.Exec(ctx, `UPDATE npcs SET avatar_url=$1, description=$2, is_active=true WHERE id=$3`, avatarURL, description, existingID)
+	} else if errors.Is(err, pgx.ErrNoRows) {
+		_, err = a.db.Exec(ctx, `INSERT INTO npcs(name,tg_username,description,avatar_url,rarity,sort_order,is_active) VALUES($1,$2,$3,$4,'普通',100,true)`, uniqueNPCName(ctx, a.db, name, tgUsername), tgUsername, description, avatarURL)
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := a.db.Exec(ctx, `UPDATE npc_applications SET status='approved' WHERE id=$1`, id); err != nil {
+		return err
+	}
+	_, _ = a.db.Exec(ctx, `INSERT INTO player_achievements(player_id,achievement_id) SELECT $1,id FROM achievements WHERE code='npc-creator' ON CONFLICT DO NOTHING`, playerID)
+	return nil
+}
+
+func (a *app) approveLevelSubmission(ctx context.Context, id string) error {
+	var groupID, name, description, payload string
+	err := a.db.QueryRow(ctx, `SELECT group_id,name,description,payload FROM level_submissions WHERE id=$1`, id).Scan(&groupID, &name, &description, &payload)
+	if err != nil {
+		return err
+	}
+	if groupID == "" {
+		switch name {
+		case "抓小孩":
+			groupID = "night-watch"
+		case "胡说哥传奇":
+			groupID = "station"
+		default:
+			return errors.New("missing group_id")
+		}
+	}
+	messages, err := validateLevelPayload(payload)
+	if err != nil {
+		return err
+	}
+	npcIDs64 := make([]int64, 0, len(messages))
+	seen := map[int64]bool{}
+	levelMessages := make([]levelMessage, 0, len(messages))
+	for index, item := range messages {
+		if !seen[item.NPCID] {
+			seen[item.NPCID] = true
+			npcIDs64 = append(npcIDs64, item.NPCID)
+		}
+		levelMessages = append(levelMessages, levelMessage{SendID: item.NPCID, Text: item.Message, Reportable: groupID == "night-watch" && index == len(messages)-1})
+	}
+	npcIDs32 := make([]int32, 0, len(npcIDs64))
+	for _, npcID := range npcIDs64 {
+		npcIDs32 = append(npcIDs32, int32(npcID))
+	}
+	photos := map[string]string{}
+	if len(npcIDs64) > 0 {
+		rows, err := a.db.Query(ctx, `SELECT public_id,avatar_url FROM npcs WHERE public_id = ANY($1)`, npcIDs32)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var publicID int64
+			var avatar string
+			if err := rows.Scan(&publicID, &avatar); err != nil {
+				return err
+			}
+			photos[fmt.Sprintf("%d", publicID)] = avatar
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+	}
+	for _, npcID := range npcIDs64 {
+		key := fmt.Sprintf("%d", npcID)
+		if _, ok := photos[key]; !ok {
+			photos[key] = ""
+		}
+	}
+	var base int
+	switch groupID {
+	case "night-watch":
+		base = 10001
+	case "station":
+		base = 30001
+	default:
+		base = 50001
+	}
+	var levelNo int
+	if err := a.db.QueryRow(ctx, `SELECT COALESCE(MAX(level_no), $2-1)+1 FROM game_levels WHERE group_id=$1`, groupID, base).Scan(&levelNo); err != nil {
+		return err
+	}
+	photosRaw, _ := json.Marshal(photos)
+	messagesRaw, _ := json.Marshal(levelMessages)
+	_, err = a.db.Exec(ctx, `
+		INSERT INTO game_levels(group_id,level_no,npc_ids,npc_photos,messages,is_active)
+		VALUES($1,$2,$3,$4,$5,true)
+		ON CONFLICT(group_id,level_no) DO UPDATE SET
+		  npc_ids=EXCLUDED.npc_ids,
+		  npc_photos=EXCLUDED.npc_photos,
+		  messages=EXCLUDED.messages,
+		  is_active=true,
+		  updated_at=now()`, groupID, levelNo, npcIDs32, photosRaw, messagesRaw)
+	if err != nil {
+		return err
+	}
+	_, err = a.db.Exec(ctx, `UPDATE level_submissions SET status='approved' WHERE id=$1`, id)
+	return err
+}
+
+func (a *app) deleteReviewApplication(ctx context.Context, itemType, id string) error {
+	switch itemType {
+	case "npc":
+		_, err := a.db.Exec(ctx, `DELETE FROM npc_applications WHERE id=$1`, id)
+		return err
+	case "level":
+		_, err := a.db.Exec(ctx, `DELETE FROM level_submissions WHERE id=$1`, id)
+		return err
+	default:
+		return errors.New("unsupported type")
+	}
+}
+
+func (a *app) markReviewApplication(ctx context.Context, itemType, id, labelName string) error {
+	var fingerprintID string
+	var payloadRaw []byte
+	switch itemType {
+	case "npc":
+		if err := a.db.QueryRow(ctx, `SELECT fingerprint_hash,fingerprint_payload FROM npc_applications WHERE id=$1`, id).Scan(&fingerprintID, &payloadRaw); err != nil {
+			return err
+		}
+	case "level":
+		if err := a.db.QueryRow(ctx, `SELECT fingerprint_hash,fingerprint_payload FROM level_submissions WHERE id=$1`, id).Scan(&fingerprintID, &payloadRaw); err != nil {
+			return err
+		}
+	default:
+		return errors.New("unsupported type")
+	}
+	rulesRaw, _ := json.Marshal(allFingerprintRules())
+	if _, err := a.db.Exec(ctx, `
+		INSERT INTO fingerprint_labels(label_name,fingerprint_id,fingerprint_payload,rules)
+		VALUES($1,$2,$3,$4)
+		ON CONFLICT(label_name,fingerprint_id) DO UPDATE SET
+		  fingerprint_payload=EXCLUDED.fingerprint_payload,
+		  rules=EXCLUDED.rules,
+		  updated_at=now()`, labelName, fingerprintID, payloadRaw, rulesRaw); err != nil {
+		return err
+	}
+	return a.deleteReviewApplication(ctx, itemType, id)
+}
+
 type adminAuthRequest struct {
 	TGInitData    string `json:"tg_init_data"`
 	TGUsername    string `json:"tg_username"`
@@ -860,37 +1081,39 @@ func (a *app) adminListNPCs(ctx context.Context) ([]map[string]any, error) {
 }
 
 func (a *app) adminListNPCApplications(ctx context.Context) ([]map[string]any, error) {
-	rows, err := a.db.Query(ctx, `SELECT id,name,tg_username,description,status,created_at FROM npc_applications ORDER BY created_at DESC LIMIT 50`)
+	rows, err := a.db.Query(ctx, `SELECT id,name,tg_username,description,status,match_label,match_score,created_at FROM npc_applications ORDER BY created_at DESC LIMIT 50`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	items := make([]map[string]any, 0)
 	for rows.Next() {
-		var id, name, username, description, status string
+		var id, name, username, description, status, matchLabel string
+		var matchScore float64
 		var createdAt time.Time
-		if err := rows.Scan(&id, &name, &username, &description, &status, &createdAt); err != nil {
+		if err := rows.Scan(&id, &name, &username, &description, &status, &matchLabel, &matchScore, &createdAt); err != nil {
 			return nil, err
 		}
-		items = append(items, map[string]any{"id": id, "name": name, "tg_username": username, "description": description, "status": status, "created_at": createdAt})
+		items = append(items, map[string]any{"id": id, "name": name, "tg_username": username, "description": description, "status": status, "match_label": matchLabel, "match_score": matchScore, "created_at": createdAt})
 	}
 	return items, rows.Err()
 }
 
 func (a *app) adminListLevelSubmissions(ctx context.Context) ([]map[string]any, error) {
-	rows, err := a.db.Query(ctx, `SELECT id,name,description,payload,status,created_at FROM level_submissions ORDER BY created_at DESC LIMIT 50`)
+	rows, err := a.db.Query(ctx, `SELECT id,name,description,payload,status,match_label,match_score,created_at FROM level_submissions ORDER BY created_at DESC LIMIT 50`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	items := make([]map[string]any, 0)
 	for rows.Next() {
-		var id, name, description, payload, status string
+		var id, name, description, payload, status, matchLabel string
+		var matchScore float64
 		var createdAt time.Time
-		if err := rows.Scan(&id, &name, &description, &payload, &status, &createdAt); err != nil {
+		if err := rows.Scan(&id, &name, &description, &payload, &status, &matchLabel, &matchScore, &createdAt); err != nil {
 			return nil, err
 		}
-		items = append(items, map[string]any{"id": id, "name": name, "description": description, "payload": payload, "status": status, "created_at": createdAt})
+		items = append(items, map[string]any{"id": id, "name": name, "description": description, "payload": payload, "status": status, "match_label": matchLabel, "match_score": matchScore, "created_at": createdAt})
 	}
 	return items, rows.Err()
 }
@@ -1276,35 +1499,68 @@ func (a *app) isIPBlacklisted(ctx context.Context, ip string) (bool, error) {
 	return blocked, err
 }
 
-func (a *app) isFingerprintLabelMatched(ctx context.Context, playerID string) (bool, error) {
+type fingerprintLabelMatch struct {
+	Label string
+	Score float64
+}
+
+func allFingerprintRules() []string {
+	return []string{"ip", "asn", "isp", "webrtc_ip", "webrtc_asn", "webrtc_isp", "canvas", "webgl", "audio", "system", "cpu", "screen", "fonts"}
+}
+
+func (a *app) playerFingerprint(ctx context.Context, playerID string) (string, []byte, error) {
+	var fingerprintID string
 	var payloadRaw []byte
-	if err := a.db.QueryRow(ctx, `SELECT fingerprint FROM players WHERE id=$1`, playerID).Scan(&payloadRaw); err != nil {
-		return false, err
-	}
-	var current map[string]any
-	if err := json.Unmarshal(payloadRaw, &current); err != nil {
-		return false, err
-	}
-	rows, err := a.db.Query(ctx, `SELECT rules,fingerprint_payload FROM fingerprint_labels`)
+	err := a.db.QueryRow(ctx, `SELECT fingerprint_hash,fingerprint FROM players WHERE id=$1`, playerID).Scan(&fingerprintID, &payloadRaw)
+	return fingerprintID, payloadRaw, err
+}
+
+func (a *app) isFingerprintLabelMatched(ctx context.Context, playerID string) (bool, error) {
+	_, payloadRaw, err := a.playerFingerprint(ctx, playerID)
 	if err != nil {
 		return false, err
 	}
+	match, err := a.bestFingerprintLabelMatchRaw(ctx, payloadRaw)
+	if err != nil {
+		return false, err
+	}
+	return match.Score >= fingerprintMatchThreshold(), nil
+}
+
+func (a *app) bestFingerprintLabelMatchRaw(ctx context.Context, payloadRaw []byte) (fingerprintLabelMatch, error) {
+	var current map[string]any
+	if err := json.Unmarshal(payloadRaw, &current); err != nil {
+		return fingerprintLabelMatch{}, err
+	}
+	rows, err := a.db.Query(ctx, `SELECT label_name,rules,fingerprint_payload FROM fingerprint_labels`)
+	if err != nil {
+		return fingerprintLabelMatch{}, err
+	}
 	defer rows.Close()
-	threshold := fingerprintMatchThreshold()
+	best := fingerprintLabelMatch{}
 	for rows.Next() {
+		var labelName string
 		var rulesRaw, targetRaw []byte
-		if err := rows.Scan(&rulesRaw, &targetRaw); err != nil {
-			return false, err
+		if err := rows.Scan(&labelName, &rulesRaw, &targetRaw); err != nil {
+			return fingerprintLabelMatch{}, err
 		}
 		var rules []string
 		var target map[string]any
 		_ = json.Unmarshal(rulesRaw, &rules)
 		_ = json.Unmarshal(targetRaw, &target)
-		if fingerprintSimilarity(current, target, rules) >= threshold {
-			return true, nil
+		score := fingerprintSimilarity(current, target, rules)
+		if score > best.Score {
+			best = fingerprintLabelMatch{Label: labelName, Score: score}
 		}
 	}
-	return false, rows.Err()
+	if err := rows.Err(); err != nil {
+		return fingerprintLabelMatch{}, err
+	}
+	if best.Score < fingerprintMatchThreshold() {
+		best.Label = ""
+		best.Score = 0
+	}
+	return best, nil
 }
 
 func fingerprintMatchThreshold() float64 {

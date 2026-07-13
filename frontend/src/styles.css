@@ -123,6 +123,10 @@ button { -webkit-tap-highlight-color: transparent; }
 .fingerprint-manual-row { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: center; padding-top: 4px; }
 .fingerprint-manual-row input { width: 100%; min-width: 0; border: 1px solid #e5d7e2; border-radius: 9px; padding: 7px 9px; color: #554a5c; background: #fff; font: inherit; font-size: 9px; }
 .admin-section small.wrap-text { overflow: visible; text-overflow: clip; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; line-height: 1.5; }
+.review-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.review-actions button { border: 0; border-radius: 8px; padding: 6px 8px; background: #ee83a5; color: #fff; cursor: pointer; font-size: 8px; font-weight: 900; }
+.review-actions button:nth-child(2) { background: #b6aaba; }
+.review-actions button:nth-child(3) { background: #7eadd8; }
 .bubble.copyable { cursor: pointer; border-color: #efc0d1; background: #fff7fb; transition: transform .16s ease, box-shadow .16s ease; }
 .bubble.copyable:hover { transform: translateY(-1px); box-shadow: 0 5px 0 #e9c9d54f; }
 .bubble.copyable::after { content: "点击复制"; position: absolute; right: 8px; top: -18px; padding: 3px 6px; border-radius: 999px; background: #ee83a5; color: #fff; font-size: 8px; font-weight: 900; opacity: 0; transform: translateY(3px); transition: opacity .16s ease, transform .16s ease; pointer-events: none; }

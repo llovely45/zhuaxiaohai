@@ -47,8 +47,8 @@ type LevelSubmissionMeta = { group_id: string; npc_ids: number[]; editor_prompt:
 type AdminOverview = {
   counts: Record<string, number>;
   npcs: NPC[];
-  npc_applications: Array<{ id: string; name: string; tg_username: string; description: string; status: string; created_at: string }>;
-  level_submissions: Array<{ id: string; name: string; description: string; payload: string; status: string; created_at: string }>;
+  npc_applications: Array<{ id: string; name: string; tg_username: string; description: string; status: string; match_label: string; match_score: number; created_at: string }>;
+  level_submissions: Array<{ id: string; name: string; description: string; payload: string; status: string; match_label: string; match_score: number; created_at: string }>;
   fingerprints: Array<{ tg_user_id: string; fingerprint_id: string; fingerprint: Record<string, unknown>; last_seen_at: string }>;
   fingerprint_labels: Array<{ id: string; label_name: string; fingerprint_id: string; fingerprint: Record<string, unknown>; rules: string[]; updated_at: string }>;
 };
@@ -153,6 +153,11 @@ function fingerprintFeatureValues(fingerprint: Record<string, unknown>, key: str
     case "fonts": return uniqueStrings(Array.isArray(details.fonts) ? details.fonts.map((item) => fullText(item, "")) : [fullText(details.fonts, "")]);
     default: return [];
   }
+}
+
+function reviewMatchText(item: { match_label?: string; match_score?: number }) {
+  if (!item.match_label || !item.match_score) return "";
+  return `${item.match_label}（${Math.round(item.match_score * 100)}%）`;
 }
 
 function createLevelProfileMap(level: LevelScript) {
@@ -714,6 +719,23 @@ export default function Home() {
     }
   };
 
+  const reviewApplication = async (type: "npc" | "level", id: string, action: "approve" | "ignore" | "mark") => {
+    const labelName = action === "mark" ? window.prompt("填写标签名称", "小孩")?.trim() : "";
+    if (action === "mark" && !labelName) return;
+    try {
+      const response = await fetch(`${API_URL}/api/v1/admin/review`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders },
+        body: JSON.stringify({ ...adminAuthPayload(), type, id, action, label_name: labelName }),
+      });
+      if (!response.ok) throw new Error("review failed");
+      await loadAdminOverview();
+    } catch {
+      setAdminUnlocked(false);
+      setAdminOverview(null);
+    }
+  };
+
   const copyLevelPrompt = async (text: string) => {
     try {
       if (navigator.clipboard?.writeText) {
@@ -1137,11 +1159,31 @@ export default function Home() {
                       </div>
                       <div className="admin-section">
                         <h4>NPC申请</h4>
-                        {adminOverview.npc_applications.slice(0, 8).map((item) => <p key={item.id}><b>{item.name} · {item.status}</b><small>{item.tg_username} · {item.description || "无备注"}</small></p>)}
+                        {adminOverview.npc_applications.slice(0, 8).map((item) => (
+                          <p key={item.id}>
+                            <b>{item.name} · {item.status}{reviewMatchText(item) ? ` · ${reviewMatchText(item)}` : ""}</b>
+                            <small>{item.tg_username} · {item.description || "无备注"}</small>
+                            <span className="review-actions">
+                              <button onClick={() => reviewApplication("npc", item.id, "approve")}>同意</button>
+                              <button onClick={() => reviewApplication("npc", item.id, "ignore")}>忽略</button>
+                              <button onClick={() => reviewApplication("npc", item.id, "mark")}>标记</button>
+                            </span>
+                          </p>
+                        ))}
                       </div>
                       <div className="admin-section">
                         <h4>关卡申请</h4>
-                        {adminOverview.level_submissions.slice(0, 8).map((item) => <p key={item.id}><b>{item.name} · {item.status}</b><small className="wrap-text">{item.payload}</small></p>)}
+                        {adminOverview.level_submissions.slice(0, 8).map((item) => (
+                          <p key={item.id}>
+                            <b>{item.name} · {item.status}{reviewMatchText(item) ? ` · ${reviewMatchText(item)}` : ""}</b>
+                            <small className="wrap-text">{item.payload}</small>
+                            <span className="review-actions">
+                              <button onClick={() => reviewApplication("level", item.id, "approve")}>同意</button>
+                              <button onClick={() => reviewApplication("level", item.id, "ignore")}>忽略</button>
+                              <button onClick={() => reviewApplication("level", item.id, "mark")}>标记</button>
+                            </span>
+                          </p>
+                        ))}
                       </div>
                       <div className="admin-section fingerprint-admin">
                         <h4>标签</h4>
