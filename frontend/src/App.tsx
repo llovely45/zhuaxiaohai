@@ -6,6 +6,7 @@ type MobilePane = "groups" | "messages";
 
 type ChatMessage = {
   id: string;
+  sendId?: number;
   sender: string;
   avatar: string;
   avatarUrl?: string;
@@ -200,8 +201,9 @@ function levelMessageToChat(level: LevelScript, item: LevelScriptMessage, index:
     isBot: profile.tone === "bot",
     text: item.text,
     time: "刚刚",
-    reportable: item.reportable,
-    correctReport: level.group_id === "night-watch" && !!item.reportable,
+    sendId: item.send_id,
+    reportable: level.group_id === "night-watch" && item.send_id === 9478 && !!item.reportable,
+    correctReport: level.group_id === "night-watch" && item.send_id === 9478 && !!item.reportable,
   };
 }
 

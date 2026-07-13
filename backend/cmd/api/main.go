@@ -969,12 +969,12 @@ func (a *app) approveLevelSubmission(ctx context.Context, id string) error {
 	npcIDs64 := make([]int64, 0, len(messages))
 	seen := map[int64]bool{}
 	levelMessages := make([]levelMessage, 0, len(messages))
-	for index, item := range messages {
+	for _, item := range messages {
 		if !seen[item.NPCID] {
 			seen[item.NPCID] = true
 			npcIDs64 = append(npcIDs64, item.NPCID)
 		}
-		levelMessages = append(levelMessages, levelMessage{SendID: item.NPCID, Text: item.Message, Reportable: groupID == "night-watch" && index == len(messages)-1})
+		levelMessages = append(levelMessages, levelMessage{SendID: item.NPCID, Text: item.Message, Reportable: groupID == "night-watch" && item.NPCID == 9478})
 	}
 	npcIDs32 := make([]int32, 0, len(npcIDs64))
 	for _, npcID := range npcIDs64 {
