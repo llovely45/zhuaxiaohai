@@ -323,6 +323,7 @@ export default function Home() {
   const [expandedLabels, setExpandedLabels] = useState<Record<string, boolean>>({});
   const [expandedFingerprintFields, setExpandedFingerprintFields] = useState<Record<string, boolean>>({});
   const [manualFingerprintValues, setManualFingerprintValues] = useState<Record<string, string>>({});
+  const [copyToast, setCopyToast] = useState("");
   const [levelForm, setLevelForm] = useState({ group_id: "", payload: "" });
   const [formStatus, setFormStatus] = useState("");
 
@@ -713,6 +714,27 @@ export default function Home() {
     }
   };
 
+  const copyLevelPrompt = async (text: string) => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const input = document.createElement("textarea");
+        input.value = text;
+        input.style.position = "fixed";
+        input.style.opacity = "0";
+        document.body.appendChild(input);
+        input.select();
+        document.execCommand("copy");
+        input.remove();
+      }
+      setCopyToast("已复制提示词");
+    } catch {
+      setCopyToast("复制失败，请长按复制");
+    }
+    window.setTimeout(() => setCopyToast(""), 1500);
+  };
+
   const validateLevelPayload = () => {
     let parsed: unknown;
     try { parsed = JSON.parse(levelForm.payload); } catch { return ""; }
@@ -986,6 +1008,7 @@ export default function Home() {
                 {activeMessages.map((message) => {
                   const isSelf = message.tone === "self";
                   const isSelected = quotedId === message.id;
+                  const isLevelPrompt = activeGroup.id === "level-submit" && message.id === "level-editor";
                   return (
                     <article
                       className={`message-row${isSelf ? " self" : ""}${message.isBot ? " bot-row" : ""}`}
@@ -995,10 +1018,13 @@ export default function Home() {
                       <div className="message-content">
                         {!isSelf && <b className="sender-name">{message.sender}</b>}
                         <button
-                          className={`bubble ${message.tone}${isSelected ? " quoted" : ""}`}
-                          onClick={() => message.reportable && setQuotedId(message.id)}
-                          disabled={!message.reportable}
-                          aria-label={message.reportable ? "引用这条不当消息" : undefined}
+                          className={`bubble ${message.tone}${isSelected ? " quoted" : ""}${isLevelPrompt ? " copyable" : ""}`}
+                          onClick={() => {
+                            if (isLevelPrompt) void copyLevelPrompt(message.text);
+                            else if (message.reportable) setQuotedId(message.id);
+                          }}
+                          disabled={!message.reportable && !isLevelPrompt}
+                          aria-label={isLevelPrompt ? "点击复制关卡提示词" : message.reportable ? "引用这条不当消息" : undefined}
                         >
                           <span>{message.text}</span>
                           <small>{message.time}</small>
@@ -1008,6 +1034,8 @@ export default function Home() {
                   );
                 })}
               </div>
+
+              {copyToast && <div className="copy-toast" role="status">{copyToast}</div>}
 
               {activeGroup.id === "level-submit" && (
                 <div className="portal-form compact-form">
