@@ -750,6 +750,7 @@ func (a *app) adminCreateFingerprintLabel(w http.ResponseWriter, r *http.Request
 		LabelName     string `json:"label_name"`
 		TargetID      string `json:"target_fingerprint_id"`
 		Field         string `json:"field"`
+		Value         string `json:"value"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -760,18 +761,29 @@ func (a *app) adminCreateFingerprintLabel(w http.ResponseWriter, r *http.Request
 	labelName := strings.TrimSpace(in.LabelName)
 	fingerprintID := strings.TrimSpace(in.TargetID)
 	field := strings.TrimSpace(in.Field)
-	if labelName == "" || fingerprintID == "" || field == "" {
-		fail(w, 400, "label_name, target_fingerprint_id and field are required")
+	value := strings.TrimSpace(in.Value)
+	if labelName == "" || field == "" || (fingerprintID == "" && value == "") {
+		fail(w, 400, "label_name, field and target_fingerprint_id or value are required")
 		return
 	}
 	var payloadRaw []byte
-	if err := a.db.QueryRow(r.Context(), `SELECT fingerprint FROM players WHERE fingerprint_hash=$1 ORDER BY last_seen_at DESC LIMIT 1`, fingerprintID).Scan(&payloadRaw); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			fail(w, 404, "fingerprint not found")
+	if value != "" {
+		payload, err := manualFingerprintPayload(field, value)
+		if err != nil {
+			fail(w, 400, "invalid value")
 			return
 		}
-		serverError(w, err)
-		return
+		payloadRaw, _ = json.Marshal(payload)
+		fingerprintID = manualFingerprintID(labelName, field, value)
+	} else {
+		if err := a.db.QueryRow(r.Context(), `SELECT fingerprint FROM players WHERE fingerprint_hash=$1 ORDER BY last_seen_at DESC LIMIT 1`, fingerprintID).Scan(&payloadRaw); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				fail(w, 404, "fingerprint not found")
+				return
+			}
+			serverError(w, err)
+			return
+		}
 	}
 	rules := []string{field}
 	var existingRaw []byte
@@ -1043,6 +1055,83 @@ func relayIPInfo(value map[string]string) map[string]string {
 		return map[string]string{"ip": "", "asn": "", "organization": ""}
 	}
 	return map[string]string{"ip": strings.TrimSpace(value["ip"]), "asn": strings.TrimSpace(value["asn"]), "organization": strings.TrimSpace(value["organization"])}
+}
+
+func manualFingerprintID(labelName, field, value string) string {
+	sum := sha256.Sum256([]byte("manual-fingerprint-label|" + labelName + "|" + field + "|" + value))
+	return hex.EncodeToString(sum[:])[:24]
+}
+
+func manualFingerprintPayload(field, value string) (map[string]any, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, errors.New("empty value")
+	}
+	payload := map[string]any{
+		"publicIpInfo":  map[string]string{"ip": "", "asn": "", "organization": ""},
+		"webrtcIpInfos": []map[string]string{},
+		"details": map[string]any{
+			"os":     "",
+			"cpu":    map[string]any{},
+			"screen": map[string]any{},
+			"fonts":  []string{},
+			"canvas": "",
+			"webgl":  map[string]any{},
+			"audio":  "",
+		},
+	}
+	publicInfo := payload["publicIpInfo"].(map[string]string)
+	webrtcInfo := map[string]string{"ip": "", "asn": "", "organization": ""}
+	details := payload["details"].(map[string]any)
+	switch field {
+	case "ip":
+		publicInfo["ip"] = value
+	case "asn":
+		publicInfo["asn"] = value
+	case "isp":
+		publicInfo["organization"] = value
+	case "webrtc_ip":
+		webrtcInfo["ip"] = value
+		payload["webrtcIpInfos"] = []map[string]string{webrtcInfo}
+	case "webrtc_asn":
+		webrtcInfo["asn"] = value
+		payload["webrtcIpInfos"] = []map[string]string{webrtcInfo}
+	case "webrtc_isp":
+		webrtcInfo["organization"] = value
+		payload["webrtcIpInfos"] = []map[string]string{webrtcInfo}
+	case "canvas":
+		details["canvas"] = value
+	case "webgl":
+		details["webgl"] = map[string]any{"hash": value}
+	case "audio":
+		details["audio"] = value
+	case "system":
+		details["os"] = value
+	case "cpu":
+		var parsed map[string]any
+		if err := json.Unmarshal([]byte(value), &parsed); err != nil {
+			return nil, err
+		}
+		details["cpu"] = parsed
+	case "screen":
+		var parsed map[string]any
+		if err := json.Unmarshal([]byte(value), &parsed); err != nil {
+			return nil, err
+		}
+		details["screen"] = parsed
+	case "fonts":
+		parts := strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == '，' || r == '\n' })
+		fonts := make([]string, 0, len(parts))
+		for _, item := range parts {
+			if trimmed := strings.TrimSpace(item); trimmed != "" {
+				fonts = append(fonts, trimmed)
+			}
+		}
+		details["fonts"] = fonts
+	default:
+		return nil, errors.New("unsupported field")
+	}
+	return payload, nil
 }
 
 func objectValue(value any) map[string]any {
