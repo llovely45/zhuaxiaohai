@@ -100,8 +100,10 @@ const levelGroups = [
 ];
 const fingerprintFeatureRows = [
   { key: "ip", label: "IP" },
+  { key: "asn", label: "ASN" },
   { key: "isp", label: "ISP" },
   { key: "webrtc_ip", label: "webrtc ip" },
+  { key: "webrtc_asn", label: "webrtc asn" },
   { key: "webrtc_isp", label: "webrtc isp" },
   { key: "canvas", label: "canvas指纹" },
   { key: "webgl", label: "webgl指纹" },
@@ -132,8 +134,10 @@ function fingerprintFeatureValue(fingerprint: Record<string, unknown>, key: stri
   const webrtc = Array.isArray(fingerprint.webrtcIpInfos) ? fingerprint.webrtcIpInfos.map(asRecord) : [];
   switch (key) {
     case "ip": return fullText(publicIp.ip);
+    case "asn": return fullText(publicIp.asn);
     case "isp": return fullText(publicIp.organization);
     case "webrtc_ip": return fullText(webrtc.map((item) => item.ip).filter(Boolean).join(", "));
+    case "webrtc_asn": return fullText(webrtc.map((item) => item.asn).filter(Boolean).join(", "));
     case "webrtc_isp": return fullText(webrtc.map((item) => item.organization).filter(Boolean).join(", "));
     case "canvas": return fullText(details.canvas);
     case "webgl": return fullText(details.webgl);
@@ -311,7 +315,6 @@ export default function Home() {
   const [adminUnlocked, setAdminUnlocked] = useState(false);
   const [adminOverview, setAdminOverview] = useState<AdminOverview | null>(null);
   const [adminLoading, setAdminLoading] = useState(false);
-  const [adminLabelName, setAdminLabelName] = useState("小孩");
   const [expandedFingerprints, setExpandedFingerprints] = useState<Record<string, boolean>>({});
   const [expandedLabels, setExpandedLabels] = useState<Record<string, boolean>>({});
   const [expandedFingerprintFields, setExpandedFingerprintFields] = useState<Record<string, boolean>>({});
@@ -673,12 +676,11 @@ export default function Home() {
   };
 
   const addFingerprintRule = async (targetFingerprintId: string, field: string) => {
-    const label = adminLabelName.trim() || "小孩";
     try {
       const response = await fetch(`${API_URL}/api/v1/admin/fingerprint-labels`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeaders },
-        body: JSON.stringify({ ...adminAuthPayload(), label_name: label, target_fingerprint_id: targetFingerprintId, field }),
+        body: JSON.stringify({ ...adminAuthPayload(), label_name: "小孩", target_fingerprint_id: targetFingerprintId, field }),
       });
       if (!response.ok) throw new Error("failed");
       await loadAdminOverview();
@@ -1089,9 +1091,8 @@ export default function Home() {
                       </div>
                       <div className="admin-section fingerprint-admin">
                         <h4>标签</h4>
-                        <label className="admin-label-input">标签<input value={adminLabelName} onChange={(event) => setAdminLabelName(event.target.value)} placeholder="例如：小孩" /></label>
                         {(() => {
-                          const labelTitle = adminLabelName.trim() || "小孩";
+                          const labelTitle = "小孩";
                           const visibleGroups = fingerprintLabelGroups.some((group) => group.labelName === labelTitle) || adminOverview.fingerprints.length === 0
                             ? fingerprintLabelGroups
                             : [...fingerprintLabelGroups, { labelName: labelTitle, items: [] }];

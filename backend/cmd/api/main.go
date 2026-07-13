@@ -1255,15 +1255,24 @@ func fingerprintRuleMatch(current, target map[string]any, rule string) bool {
 	switch rule {
 	case "ip":
 		return stringFeature(current, "publicIpInfo.ip") != "" && stringFeature(current, "publicIpInfo.ip") == stringFeature(target, "publicIpInfo.ip")
+	case "asn":
+		return stringFeature(current, "publicIpInfo.asn") != "" && stringFeature(current, "publicIpInfo.asn") == stringFeature(target, "publicIpInfo.asn")
 	case "isp":
 		return stringFeature(current, "publicIpInfo.organization") != "" && stringFeature(current, "publicIpInfo.organization") == stringFeature(target, "publicIpInfo.organization")
 	case "webrtc_ip":
 		return intersects(stringSliceFeature(current, "webrtcIpInfos.ip"), stringSliceFeature(target, "webrtcIpInfos.ip"))
+	case "webrtc_asn":
+		return intersects(stringSliceFeature(current, "webrtcIpInfos.asn"), stringSliceFeature(target, "webrtcIpInfos.asn"))
 	case "webrtc_isp":
 		return intersects(stringSliceFeature(current, "webrtcIpInfos.organization"), stringSliceFeature(target, "webrtcIpInfos.organization"))
 	case "canvas":
 		return stringFeature(current, "details.canvas") != "" && stringFeature(current, "details.canvas") == stringFeature(target, "details.canvas")
 	case "webgl":
+		currentHash := stringFeature(current, "details.webgl.hash")
+		targetHash := stringFeature(target, "details.webgl.hash")
+		if currentHash != "" && targetHash != "" {
+			return currentHash == targetHash
+		}
 		return jsonFeature(current, "details.webgl") != "" && jsonFeature(current, "details.webgl") == jsonFeature(target, "details.webgl")
 	case "audio":
 		return stringFeature(current, "details.audio") != "" && stringFeature(current, "details.audio") == stringFeature(target, "details.audio")
