@@ -267,7 +267,7 @@ func (a *app) getLevel(w http.ResponseWriter, r *http.Request) {
 		SELECT level_no,npc_ids,npc_photos,messages
 		FROM game_levels
 		WHERE group_id=$1 AND is_active
-		ORDER BY level_no
+		ORDER BY updated_at DESC, level_no DESC
 		LIMIT 1`, groupID).Scan(&levelNo, &npcIDs, &npcPhotosRaw, &messagesRaw)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

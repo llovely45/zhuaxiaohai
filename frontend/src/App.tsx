@@ -1163,11 +1163,13 @@ export default function Home() {
                           <p key={item.id}>
                             <b>{item.name} · {item.status}{reviewMatchText(item) ? ` · ${reviewMatchText(item)}` : ""}</b>
                             <small>{item.tg_username} · {item.description || "无备注"}</small>
-                            <span className="review-actions">
-                              <button onClick={() => reviewApplication("npc", item.id, "approve")}>同意</button>
-                              <button onClick={() => reviewApplication("npc", item.id, "ignore")}>忽略</button>
-                              <button onClick={() => reviewApplication("npc", item.id, "mark")}>标记</button>
-                            </span>
+                            {item.status === "pending" && (
+                              <span className="review-actions">
+                                <button onClick={() => reviewApplication("npc", item.id, "approve")}>同意</button>
+                                <button onClick={() => reviewApplication("npc", item.id, "ignore")}>忽略</button>
+                                <button onClick={() => reviewApplication("npc", item.id, "mark")}>标记</button>
+                              </span>
+                            )}
                           </p>
                         ))}
                       </div>
@@ -1177,11 +1179,13 @@ export default function Home() {
                           <p key={item.id}>
                             <b>{item.name} · {item.status}{reviewMatchText(item) ? ` · ${reviewMatchText(item)}` : ""}</b>
                             <small className="wrap-text">{item.payload}</small>
-                            <span className="review-actions">
-                              <button onClick={() => reviewApplication("level", item.id, "approve")}>同意</button>
-                              <button onClick={() => reviewApplication("level", item.id, "ignore")}>忽略</button>
-                              <button onClick={() => reviewApplication("level", item.id, "mark")}>标记</button>
-                            </span>
+                            {item.status === "pending" && (
+                              <span className="review-actions">
+                                <button onClick={() => reviewApplication("level", item.id, "approve")}>同意</button>
+                                <button onClick={() => reviewApplication("level", item.id, "ignore")}>忽略</button>
+                                <button onClick={() => reviewApplication("level", item.id, "mark")}>标记</button>
+                              </span>
+                            )}
                           </p>
                         ))}
                       </div>
