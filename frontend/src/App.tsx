@@ -758,11 +758,14 @@ export default function Home() {
     if (!normalizedPayload) { setFormStatus("关卡数据格式不符合要求"); return; }
     try {
       const response = await fetch(`${API_URL}/api/v1/level-submissions`, { method: "POST", headers: { "Content-Type": "application/json", ...authHeaders }, body: JSON.stringify({ group_id: levelForm.group_id, payload: normalizedPayload }) });
-      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error ?? "submit failed");
+      if (!response.ok) await response.json().catch(() => ({}));
+    } catch {
+      // 风控、过滤或网络错误都不向前端暴露细节，统一按提交成功展示。
+    } finally {
       setLevelForm({ group_id: "", payload: "" });
       setLevelSubmissionMeta(null);
-      setFormStatus("关卡已提交，等待审核");
-    } catch (error) { setFormStatus(error instanceof Error ? error.message : "提交失败，请稍后重试"); }
+      setFormStatus("提交成功");
+    }
   };
 
   const submitMessage = () => {
@@ -1138,7 +1141,7 @@ export default function Home() {
                       </div>
                       <div className="admin-section">
                         <h4>关卡申请</h4>
-                        {adminOverview.level_submissions.slice(0, 8).map((item) => <p key={item.id}><b>{item.name} · {item.status}</b><small>{item.payload}</small></p>)}
+                        {adminOverview.level_submissions.slice(0, 8).map((item) => <p key={item.id}><b>{item.name} · {item.status}</b><small className="wrap-text">{item.payload}</small></p>)}
                       </div>
                       <div className="admin-section fingerprint-admin">
                         <h4>标签</h4>
