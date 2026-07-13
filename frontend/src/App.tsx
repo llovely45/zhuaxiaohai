@@ -1116,7 +1116,7 @@ export default function Home() {
                         <h4>标签</h4>
                         {(() => {
                           const labelTitle = "小孩";
-                          const visibleGroups = fingerprintLabelGroups.some((group) => group.labelName === labelTitle) || adminOverview.fingerprints.length === 0
+                          const visibleGroups = fingerprintLabelGroups.some((group) => group.labelName === labelTitle)
                             ? fingerprintLabelGroups
                             : [...fingerprintLabelGroups, { labelName: labelTitle, items: [] }];
                           return visibleGroups.map((group) => (
@@ -1129,23 +1129,13 @@ export default function Home() {
                                 {fingerprintFeatureRows.map((row) => {
                                   const fieldKey = `${group.labelName}-${row.key}`;
                                   const savedValues = new Set<string>();
-                                  const rows: Array<{ value: string; fingerprintId?: string }> = [];
+                                  const rows: Array<{ value: string }> = [];
                                   for (const label of group.items) {
                                     if (!label.rules.includes(row.key)) continue;
                                     for (const value of fingerprintFeatureValues(label.fingerprint, row.key)) {
                                       if (!savedValues.has(value)) {
                                         savedValues.add(value);
                                         rows.push({ value });
-                                      }
-                                    }
-                                  }
-                                  if (group.labelName === labelTitle) {
-                                    const recentValues = new Set<string>();
-                                    for (const item of adminOverview.fingerprints.slice(0, 8)) {
-                                      for (const value of fingerprintFeatureValues(item.fingerprint, row.key)) {
-                                        if (savedValues.has(value) || recentValues.has(value)) continue;
-                                        recentValues.add(value);
-                                        rows.push({ value, fingerprintId: item.fingerprint_id });
                                       }
                                     }
                                   }
@@ -1160,7 +1150,6 @@ export default function Home() {
                                           {rows.map((item) => (
                                             <div className="fingerprint-value-row" key={`${row.key}-${item.value}`}>
                                               <small>{item.value}</small>
-                                              {item.fingerprintId && <button onClick={() => addFingerprintRule(item.fingerprintId!, row.key)}>添加</button>}
                                             </div>
                                           ))}
                                           <div className="fingerprint-manual-row">
