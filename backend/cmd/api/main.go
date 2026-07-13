@@ -106,6 +106,8 @@ func main() {
 	mux.HandleFunc("GET /api/v1/achievements", a.listAchievements)
 	mux.HandleFunc("POST /api/v1/achievements/unlock", a.unlockAchievement)
 	mux.HandleFunc("POST /api/v1/level-submissions", a.createLevelSubmission)
+	mux.HandleFunc("POST /api/v1/admin/session", a.createAdminSession)
+	mux.HandleFunc("POST /api/v1/admin/overview", a.adminOverview)
 
 	server := &http.Server{Addr: ":" + env("PORT", "8080"), Handler: a.middleware(mux), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
@@ -576,7 +578,12 @@ func (a *app) createLevelSubmission(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var in struct{ GroupID, Name, Description, Payload string }
+	var in struct {
+		GroupID     string `json:"group_id"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Payload     string `json:"payload"`
+	}
 	if !decode(w, r, &in) {
 		return
 	}
@@ -654,6 +661,145 @@ func (a *app) createLevelSubmission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	write(w, 201, map[string]string{"id": id, "status": "pending"})
+}
+
+func (a *app) createAdminSession(w http.ResponseWriter, r *http.Request) {
+	var in adminAuthRequest
+	if !decode(w, r, &in) {
+		return
+	}
+	user, ok := a.adminUser(w, r, in)
+	if !ok {
+		return
+	}
+	write(w, 200, map[string]any{"ok": true, "username": strings.ToLower(normalizeTelegramUsername(user.Username))})
+}
+
+func (a *app) adminOverview(w http.ResponseWriter, r *http.Request) {
+	var in adminAuthRequest
+	if !decode(w, r, &in) {
+		return
+	}
+	if _, ok := a.adminUser(w, r, in); !ok {
+		return
+	}
+	counts := map[string]int64{}
+	for key, query := range map[string]string{
+		"players":           `SELECT count(*) FROM players`,
+		"npcs":              `SELECT count(*) FROM npcs`,
+		"npc_applications":  `SELECT count(*) FROM npc_applications`,
+		"level_submissions": `SELECT count(*) FROM level_submissions`,
+		"miniapp_events":    `SELECT count(*) FROM miniapp_events`,
+	} {
+		var count int64
+		if err := a.db.QueryRow(r.Context(), query).Scan(&count); err != nil {
+			serverError(w, err)
+			return
+		}
+		counts[key] = count
+	}
+	npcs, err := a.adminListNPCs(r.Context())
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	npcApplications, err := a.adminListNPCApplications(r.Context())
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	levelSubmissions, err := a.adminListLevelSubmissions(r.Context())
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	write(w, 200, map[string]any{"counts": counts, "npcs": npcs, "npc_applications": npcApplications, "level_submissions": levelSubmissions})
+}
+
+type adminAuthRequest struct {
+	TGInitData    string `json:"tg_init_data"`
+	TGUsername    string `json:"tg_username"`
+	FingerprintID string `json:"fingerprint_id"`
+	MiniappID     string `json:"miniapp_id"`
+}
+
+func (a *app) adminUser(w http.ResponseWriter, r *http.Request, in adminAuthRequest) (telegramInitUser, bool) {
+	if _, ok := a.playerID(w, r); !ok {
+		return telegramInitUser{}, false
+	}
+	if a.botToken == "" || !verifyTelegram(in.TGInitData, a.botToken) {
+		fail(w, 403, "forbidden")
+		return telegramInitUser{}, false
+	}
+	tgUser, ok := telegramUser(in.TGInitData)
+	tgID := tgUser.ID.String()
+	verifiedUsername := strings.ToLower(normalizeTelegramUsername(tgUser.Username))
+	submittedUsername := strings.ToLower(normalizeTelegramUsername(in.TGUsername))
+	if !ok || verifiedUsername != "@anlianxiaoliu" || submittedUsername != "@anlianxiaoliu" || tgID == "" {
+		fail(w, 403, "forbidden")
+		return telegramInitUser{}, false
+	}
+	if !hmac.Equal([]byte(strings.TrimSpace(in.FingerprintID)), []byte(r.Header.Get("X-Device-Fingerprint"))) || !hmac.Equal([]byte(strings.TrimSpace(in.MiniappID)), []byte(r.Header.Get("X-Miniapp-ID"))) || !hmac.Equal([]byte(strings.TrimSpace(in.MiniappID)), []byte(tgID)) {
+		fail(w, 403, "forbidden")
+		return telegramInitUser{}, false
+	}
+	return tgUser, true
+}
+
+func (a *app) adminListNPCs(ctx context.Context) ([]map[string]any, error) {
+	rows, err := a.db.Query(ctx, `SELECT public_id,name,tg_username,description,avatar_url,is_active,created_at FROM npcs ORDER BY public_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]map[string]any, 0)
+	for rows.Next() {
+		var publicID int64
+		var name, username, description, avatarURL string
+		var active bool
+		var createdAt time.Time
+		if err := rows.Scan(&publicID, &name, &username, &description, &avatarURL, &active, &createdAt); err != nil {
+			return nil, err
+		}
+		items = append(items, map[string]any{"id": publicID, "name": name, "tg_username": username, "description": description, "avatar_url": avatarURL, "is_active": active, "created_at": createdAt})
+	}
+	return items, rows.Err()
+}
+
+func (a *app) adminListNPCApplications(ctx context.Context) ([]map[string]any, error) {
+	rows, err := a.db.Query(ctx, `SELECT id,name,tg_username,description,status,created_at FROM npc_applications ORDER BY created_at DESC LIMIT 50`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]map[string]any, 0)
+	for rows.Next() {
+		var id, name, username, description, status string
+		var createdAt time.Time
+		if err := rows.Scan(&id, &name, &username, &description, &status, &createdAt); err != nil {
+			return nil, err
+		}
+		items = append(items, map[string]any{"id": id, "name": name, "tg_username": username, "description": description, "status": status, "created_at": createdAt})
+	}
+	return items, rows.Err()
+}
+
+func (a *app) adminListLevelSubmissions(ctx context.Context) ([]map[string]any, error) {
+	rows, err := a.db.Query(ctx, `SELECT id,name,description,payload,status,created_at FROM level_submissions ORDER BY created_at DESC LIMIT 50`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]map[string]any, 0)
+	for rows.Next() {
+		var id, name, description, payload, status string
+		var createdAt time.Time
+		if err := rows.Scan(&id, &name, &description, &payload, &status, &createdAt); err != nil {
+			return nil, err
+		}
+		items = append(items, map[string]any{"id": id, "name": name, "description": description, "payload": payload, "status": status, "created_at": createdAt})
+	}
+	return items, rows.Err()
 }
 
 func verifyTelegram(raw, token string) bool {

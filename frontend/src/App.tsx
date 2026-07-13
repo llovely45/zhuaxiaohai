@@ -44,6 +44,12 @@ type LevelScript = {
   messages: LevelScriptMessage[];
 };
 type LevelSubmissionMeta = { group_id: string; npc_ids: number[]; editor_prompt: string };
+type AdminOverview = {
+  counts: Record<string, number>;
+  npcs: NPC[];
+  npc_applications: Array<{ id: string; name: string; tg_username: string; description: string; status: string; created_at: string }>;
+  level_submissions: Array<{ id: string; name: string; description: string; payload: string; status: string; created_at: string }>;
+};
 type PreparedFingerprint = {
   fingerprint: Awaited<ReturnType<typeof collectRelayFingerprint>>;
   webrtcIps: string[];
@@ -249,12 +255,17 @@ export default function Home() {
   const turnstileWidget = useRef<string | null>(null);
   const fingerprintStarted = useRef(false);
   const levelTimers = useRef<number[]>([]);
+  const adminAvatarClicks = useRef(0);
+  const adminClickResetTimer = useRef<number | null>(null);
   const [npcs, setNpcs] = useState<NPC[]>(fallbackNPCs);
   const [levelTags, setLevelTags] = useState<Record<string, string>>({});
   const [levelSubmissionMeta, setLevelSubmissionMeta] = useState<LevelSubmissionMeta | null>(null);
   const [achievements, setAchievements] = useState<Achievement[]>([]);
   const [npcForm, setNpcForm] = useState({ name: "", tg_username: "", description: "", avatar_url: "", extracted_data: {} as Record<string, unknown> });
   const [npcEditable, setNpcEditable] = useState(false);
+  const [adminUnlocked, setAdminUnlocked] = useState(false);
+  const [adminOverview, setAdminOverview] = useState<AdminOverview | null>(null);
+  const [adminLoading, setAdminLoading] = useState(false);
   const [levelForm, setLevelForm] = useState({ group_id: "", payload: "" });
   const [formStatus, setFormStatus] = useState("");
 
@@ -543,6 +554,65 @@ export default function Home() {
     setNpcForm({ name: data.name, tg_username: data.tg_username, description: "", avatar_url: data.avatar_url, extracted_data: data });
     setNpcEditable(true);
     setFormStatus("已获取当前TG用户信息，现在可以修改名称、用户名和备注");
+  };
+
+  const adminAuthPayload = () => {
+    const telegram = getTelegramWebApp();
+    return {
+      tg_init_data: telegram?.initData ?? "",
+      tg_username: npcForm.tg_username,
+      fingerprint_id: fingerprintId,
+      miniapp_id: miniappId,
+    };
+  };
+
+  const loadAdminOverview = async () => {
+    setAdminLoading(true);
+    try {
+      const response = await fetch(`${API_URL}/api/v1/admin/overview`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders },
+        body: JSON.stringify(adminAuthPayload()),
+      });
+      if (!response.ok) throw new Error("admin denied");
+      setAdminOverview(await response.json() as AdminOverview);
+    } catch {
+      setAdminUnlocked(false);
+      setAdminOverview(null);
+    } finally {
+      setAdminLoading(false);
+    }
+  };
+
+  const requestAdminAccess = async () => {
+    const telegram = getTelegramWebApp();
+    if (!telegram?.initData || !npcForm.tg_username) return;
+    try {
+      const response = await fetch(`${API_URL}/api/v1/admin/session`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders },
+        body: JSON.stringify(adminAuthPayload()),
+      });
+      if (!response.ok) return;
+      const data = await response.json() as { ok?: boolean };
+      if (data.ok) {
+        setAdminUnlocked(true);
+        await loadAdminOverview();
+      }
+    } catch {
+      setAdminUnlocked(false);
+    }
+  };
+
+  const handleAdminAvatarClick = () => {
+    if (!npcEditable || !npcForm.avatar_url) return;
+    adminAvatarClicks.current += 1;
+    if (adminClickResetTimer.current) window.clearTimeout(adminClickResetTimer.current);
+    adminClickResetTimer.current = window.setTimeout(() => { adminAvatarClicks.current = 0; }, 1500);
+    if (adminAvatarClicks.current >= 5) {
+      adminAvatarClicks.current = 0;
+      void requestAdminAccess();
+    }
   };
 
   const validateLevelPayload = () => {
@@ -912,7 +982,7 @@ export default function Home() {
               <div className="portal-form">
                 <button className="extract-button" onClick={extractNPCData}>获取我的TG信息</button>
                 <div className="npc-apply-preview">
-                  <div className="npc-apply-avatar">{npcForm.avatar_url ? <img src={npcForm.avatar_url} alt="" /> : (npcForm.name || "你").slice(0, 1)}</div>
+                  <div className="npc-apply-avatar" onClick={handleAdminAvatarClick}>{npcForm.avatar_url ? <img src={npcForm.avatar_url} alt="" /> : (npcForm.name || "你").slice(0, 1)}</div>
                   <div><strong>{npcForm.name || "等待获取"}</strong><small>{npcForm.tg_username || "点击按钮自动填充"}</small></div>
                 </div>
                 <label>名称<input disabled={!npcEditable} value={npcForm.name} onChange={(event) => setNpcForm({ ...npcForm, name: event.target.value })} placeholder="提取后自动填充" /></label>
@@ -921,6 +991,33 @@ export default function Home() {
                 <button disabled={!npcEditable} onClick={submitNPC}>提交NPC申请</button>
                 {formStatus && <p className="form-status">{formStatus}</p>}
               </div>
+              {adminUnlocked && (
+                <section className="admin-panel">
+                  <div className="admin-panel-head">
+                    <div><p className="portal-kicker">ADMIN</p><h3>管理后台</h3></div>
+                    <button disabled={adminLoading} onClick={loadAdminOverview}>{adminLoading ? "刷新中" : "刷新"}</button>
+                  </div>
+                  {adminOverview && (
+                    <>
+                      <div className="admin-stats">
+                        {Object.entries(adminOverview.counts).map(([key, value]) => <span key={key}><b>{value}</b><small>{key}</small></span>)}
+                      </div>
+                      <div className="admin-section">
+                        <h4>NPC</h4>
+                        {adminOverview.npcs.slice(0, 12).map((npc) => <p key={npc.id}><b>#{npc.id} {npc.name}</b><small>{npc.tg_username || "无用户名"} · {npc.description}</small></p>)}
+                      </div>
+                      <div className="admin-section">
+                        <h4>NPC申请</h4>
+                        {adminOverview.npc_applications.slice(0, 8).map((item) => <p key={item.id}><b>{item.name} · {item.status}</b><small>{item.tg_username} · {item.description || "无备注"}</small></p>)}
+                      </div>
+                      <div className="admin-section">
+                        <h4>关卡申请</h4>
+                        {adminOverview.level_submissions.slice(0, 8).map((item) => <p key={item.id}><b>{item.name} · {item.status}</b><small>{item.payload}</small></p>)}
+                      </div>
+                    </>
+                  )}
+                </section>
+              )}
             </aside>
           </div>
         </section>
