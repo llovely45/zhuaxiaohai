@@ -116,36 +116,6 @@ function getTelegramWebApp(): TelegramWebApp | undefined {
   return (window as Window & { Telegram?: { WebApp?: TelegramWebApp } }).Telegram?.WebApp;
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
-
-function shortText(value: unknown, fallback = "无") {
-  const text = typeof value === "string" ? value : JSON.stringify(value ?? "");
-  if (!text || text === "\"\"") return fallback;
-  return text.length > 80 ? `${text.slice(0, 80)}…` : text;
-}
-
-function fingerprintFeatureValue(fingerprint: Record<string, unknown>, key: string) {
-  const publicIp = asRecord(fingerprint.publicIpInfo);
-  const details = asRecord(fingerprint.details);
-  const webrtc = Array.isArray(fingerprint.webrtcIpInfos) ? fingerprint.webrtcIpInfos.map(asRecord) : [];
-  switch (key) {
-    case "ip": return shortText(publicIp.ip);
-    case "isp": return shortText(publicIp.organization);
-    case "webrtc_ip": return shortText(webrtc.map((item) => item.ip).filter(Boolean).join(", "));
-    case "webrtc_isp": return shortText(webrtc.map((item) => item.organization).filter(Boolean).join(", "));
-    case "canvas": return shortText(details.canvas);
-    case "webgl": return shortText(details.webgl);
-    case "audio": return shortText(details.audio);
-    case "system": return shortText(details.os);
-    case "cpu": return shortText(details.cpu);
-    case "screen": return shortText(details.screen);
-    case "fonts": return shortText(Array.isArray(details.fonts) ? details.fonts.join(", ") : details.fonts);
-    default: return "无";
-  }
-}
-
 function createLevelProfileMap(level: LevelScript) {
   const profiles: Record<number, { name: string; avatar: string; tone: ChatMessage["tone"] }> = {};
   level.npc_id.forEach((id) => {
@@ -314,6 +284,7 @@ export default function Home() {
   const [adminLabelName, setAdminLabelName] = useState("小孩");
   const [expandedFingerprints, setExpandedFingerprints] = useState<Record<string, boolean>>({});
   const [expandedLabels, setExpandedLabels] = useState<Record<string, boolean>>({});
+  const [expandedFingerprintFields, setExpandedFingerprintFields] = useState<Record<string, boolean>>({});
   const [levelForm, setLevelForm] = useState({ group_id: "", payload: "" });
   const [formStatus, setFormStatus] = useState("");
 
@@ -1079,7 +1050,7 @@ export default function Home() {
                         {adminOverview.level_submissions.slice(0, 8).map((item) => <p key={item.id}><b>{item.name} · {item.status}</b><small>{item.payload}</small></p>)}
                       </div>
                       <div className="admin-section fingerprint-admin">
-                        <h4>指纹识别</h4>
+                        <h4>标签</h4>
                         <label className="admin-label-input">标签<input value={adminLabelName} onChange={(event) => setAdminLabelName(event.target.value)} placeholder="例如：小孩" /></label>
                         {adminOverview.fingerprint_labels.map((label) => (
                           <article className="fingerprint-card" key={label.id}>
@@ -1088,9 +1059,19 @@ export default function Home() {
                             </button>
                             {expandedLabels[label.id] && (
                               <div className="fingerprint-detail">
-                                <p><b>ID</b><small>{label.fingerprint_id}</small></p>
-                                <p><b>规则</b><small>{label.rules.map((rule) => fingerprintFeatureRows.find((row) => row.key === rule)?.label ?? rule).join(", ") || "无"}</small></p>
-                                {fingerprintFeatureRows.map((row) => <p key={row.key}><b>{row.label}</b><small>{fingerprintFeatureValue(label.fingerprint, row.key)}</small></p>)}
+                                <p><b>规则数量</b><small>{label.rules.length} 个字段</small></p>
+                                {fingerprintFeatureRows.map((row) => {
+                                  const fieldKey = `${label.id}-${row.key}`;
+                                  const enabled = label.rules.includes(row.key);
+                                  return (
+                                    <div className="fingerprint-field" key={row.key}>
+                                      <button className="fingerprint-field-title" onClick={() => setExpandedFingerprintFields((current) => ({ ...current, [fieldKey]: !current[fieldKey] }))}>
+                                        <span>{row.label}</span><b>{enabled ? "已添加" : "未添加"} · {expandedFingerprintFields[fieldKey] ? "收起" : "展开"}</b>
+                                      </button>
+                                      {expandedFingerprintFields[fieldKey] && <small>该字段用于相似度匹配，具体值不在前端显示。</small>}
+                                    </div>
+                                  );
+                                })}
                               </div>
                             )}
                           </article>
@@ -1104,9 +1085,9 @@ export default function Home() {
                               <div className="fingerprint-detail">
                                 <p><b>TG ID</b><small>{item.tg_user_id || "无"}</small></p>
                                 {fingerprintFeatureRows.map((row) => (
-                                  <p key={row.key}>
+                                  <p className="fingerprint-field-row" key={row.key}>
                                     <b>{row.label}</b>
-                                    <small>{fingerprintFeatureValue(item.fingerprint, row.key)}</small>
+                                    <small>具体值不显示</small>
                                     <button onClick={() => addFingerprintRule(item.fingerprint_id, row.key)}>添加</button>
                                   </p>
                                 ))}
