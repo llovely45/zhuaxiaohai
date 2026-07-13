@@ -160,6 +160,24 @@ function reviewMatchText(item: { match_label?: string; match_score?: number }) {
   return `${item.match_label}（${Math.round(item.match_score * 100)}%）`;
 }
 
+function statusText(status: string) {
+  const map: Record<string, string> = { pending: "待审核", approved: "已通过", rejected: "已拒绝" };
+  return map[status] ?? status;
+}
+
+function adminCountText(key: string) {
+  const map: Record<string, string> = {
+    npcs: "角色",
+    npc_applications: "角色申请",
+    level_submissions: "关卡申请",
+    players: "玩家",
+    achievements: "成就",
+    fingerprint_labels: "标签",
+    fingerprints: "指纹",
+  };
+  return map[key] ?? key;
+}
+
 function createLevelProfileMap(level: LevelScript) {
   const profiles: Record<number, { name: string; avatar: string; tone: ChatMessage["tone"] }> = {};
   level.npc_id.forEach((id) => {
@@ -232,7 +250,7 @@ const groups: ChatGroup[] = [
   },
   {
     id: "help-desk",
-    name: "申请NPC",
+    name: "申请角色",
     tag: "机器人",
     color: "yellow",
     preview: "群规机器人：处理指引已更新",
@@ -598,7 +616,7 @@ export default function Home() {
       }
       setNpcForm({ name: "", tg_username: "", description: "", avatar_url: "", extracted_data: {} });
       setNpcEditable(false);
-      setFormStatus("NPC已添加到系统");
+      setFormStatus("角色申请已提交，等待审核");
     } catch { setFormStatus("不符合申请要求"); }
   };
 
@@ -1111,10 +1129,10 @@ export default function Home() {
       )}
 
       {view === "npc" && (
-        <section className="npc-stage" aria-label="NPC展示与申请">
+        <section className="npc-stage" aria-label="角色展示与申请">
           <header className="npc-header">
             <button onClick={() => { setView("chat"); setMobilePane("groups"); }} aria-label="返回聊天">‹</button>
-            <div><p>抓小孩角色中心</p><h2>系统 NPC</h2></div>
+            <div><p>抓小孩角色中心</p><h2>系统角色</h2></div>
             <span>{npcs.length} 位角色</span>
           </header>
           <div className="npc-layout">
@@ -1127,9 +1145,9 @@ export default function Home() {
               ))}
             </div>
             <aside className="npc-apply">
-              <p className="portal-kicker">CREATE A PAPER NPC</p>
-              <h3>申请新 NPC</h3>
-              <p>提交角色设定，审核通过后会出现在系统NPC列表中。</p>
+              <p className="portal-kicker">角色申请</p>
+              <h3>申请新角色</h3>
+              <p>提交角色设定，审核通过后会出现在系统角色列表中。</p>
               <div className="portal-form">
                 <button className="extract-button" onClick={extractNPCData}>获取我的TG信息</button>
                 <div className="npc-apply-preview">
@@ -1139,29 +1157,29 @@ export default function Home() {
                 <label>名称<input disabled={!npcEditable} value={npcForm.name} onChange={(event) => setNpcForm({ ...npcForm, name: event.target.value })} placeholder="提取后自动填充" /></label>
                 <label>TG用户名<input disabled value={npcForm.tg_username} placeholder="自动填充" /></label>
                 <label>备注<textarea disabled={!npcEditable} value={npcForm.description} onChange={(event) => setNpcForm({ ...npcForm, description: event.target.value })} placeholder="有简介则自动填充，可修改" /></label>
-                <button disabled={!npcEditable} onClick={submitNPC}>提交NPC申请</button>
+                <button disabled={!npcEditable} onClick={submitNPC}>提交角色申请</button>
                 {formStatus && <p className="form-status">{formStatus}</p>}
               </div>
               {adminUnlocked && (
                 <section className="admin-panel">
                   <div className="admin-panel-head">
-                    <div><p className="portal-kicker">ADMIN</p><h3>管理后台</h3></div>
+                    <div><p className="portal-kicker">后台</p><h3>管理后台</h3></div>
                     <button disabled={adminLoading} onClick={loadAdminOverview}>{adminLoading ? "刷新中" : "刷新"}</button>
                   </div>
                   {adminOverview && (
                     <>
                       <div className="admin-stats">
-                        {Object.entries(adminOverview.counts).map(([key, value]) => <span key={key}><b>{value}</b><small>{key}</small></span>)}
+                        {Object.entries(adminOverview.counts).map(([key, value]) => <span key={key}><b>{value}</b><small>{adminCountText(key)}</small></span>)}
                       </div>
                       <div className="admin-section">
-                        <h4>NPC</h4>
+                        <h4>系统角色</h4>
                         {adminOverview.npcs.slice(0, 12).map((npc) => <p key={npc.id}><b>#{npc.id} {npc.name}</b><small>{npc.tg_username || "无用户名"} · {npc.description}</small></p>)}
                       </div>
                       <div className="admin-section">
-                        <h4>NPC申请</h4>
+                        <h4>角色申请</h4>
                         {adminOverview.npc_applications.slice(0, 8).map((item) => (
                           <p key={item.id}>
-                            <b>{item.name} · {item.status}{reviewMatchText(item) ? ` · ${reviewMatchText(item)}` : ""}</b>
+                            <b>{item.name} · {statusText(item.status)}{reviewMatchText(item) ? ` · ${reviewMatchText(item)}` : ""}</b>
                             <small>{item.tg_username} · {item.description || "无备注"}</small>
                             {item.status === "pending" && (
                               <span className="review-actions">
@@ -1177,7 +1195,7 @@ export default function Home() {
                         <h4>关卡申请</h4>
                         {adminOverview.level_submissions.slice(0, 8).map((item) => (
                           <p key={item.id}>
-                            <b>{item.name} · {item.status}{reviewMatchText(item) ? ` · ${reviewMatchText(item)}` : ""}</b>
+                            <b>{item.name} · {statusText(item.status)}{reviewMatchText(item) ? ` · ${reviewMatchText(item)}` : ""}</b>
                             <small className="wrap-text">{item.payload}</small>
                             {item.status === "pending" && (
                               <span className="review-actions">
