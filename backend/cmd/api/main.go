@@ -111,6 +111,7 @@ func main() {
 	mux.HandleFunc("POST /api/v1/admin/overview", a.adminOverview)
 	mux.HandleFunc("POST /api/v1/admin/fingerprint-labels", a.adminCreateFingerprintLabel)
 	mux.HandleFunc("POST /api/v1/admin/review", a.adminReviewApplication)
+	mux.HandleFunc("POST /api/v1/admin/delete", a.adminDeleteItem)
 
 	server := &http.Server{Addr: ":" + env("PORT", "8080"), Handler: a.middleware(mux), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
@@ -870,6 +871,39 @@ func (a *app) adminReviewApplication(w http.ResponseWriter, r *http.Request) {
 	write(w, 200, map[string]any{"ok": true})
 }
 
+func (a *app) adminDeleteItem(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		TGInitData    string `json:"tg_init_data"`
+		TGUsername    string `json:"tg_username"`
+		FingerprintID string `json:"fingerprint_id"`
+		MiniappID     string `json:"miniapp_id"`
+		Type          string `json:"type"`
+		ID            string `json:"id"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	if _, ok := a.adminUser(w, r, adminAuthRequest{TGInitData: in.TGInitData, TGUsername: in.TGUsername, FingerprintID: in.FingerprintID, MiniappID: in.MiniappID}); !ok {
+		return
+	}
+	switch strings.TrimSpace(in.Type) {
+	case "npc":
+		if err := a.deleteNPC(r.Context(), strings.TrimSpace(in.ID)); err != nil {
+			serverError(w, err)
+			return
+		}
+	case "level_submission":
+		if err := a.deleteApprovedLevelSubmission(r.Context(), strings.TrimSpace(in.ID)); err != nil {
+			serverError(w, err)
+			return
+		}
+	default:
+		fail(w, 400, "unsupported type")
+		return
+	}
+	write(w, 200, map[string]any{"ok": true})
+}
+
 func (a *app) approveNPCApplication(ctx context.Context, id string) error {
 	var playerID, name, tgUsername, description string
 	var extractedRaw []byte
@@ -985,7 +1019,57 @@ func (a *app) approveLevelSubmission(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	_, err = a.db.Exec(ctx, `UPDATE level_submissions SET status='approved' WHERE id=$1`, id)
+	_, err = a.db.Exec(ctx, `UPDATE level_submissions SET status='approved', approved_level_no=$2 WHERE id=$1`, id, levelNo)
+	return err
+}
+
+func (a *app) deleteNPC(ctx context.Context, publicID string) error {
+	id := strings.TrimSpace(publicID)
+	if id == "" {
+		return errors.New("missing npc id")
+	}
+	_, err := a.db.Exec(ctx, `UPDATE npcs SET is_active=false WHERE public_id=$1::bigint`, id)
+	return err
+}
+
+func (a *app) deleteApprovedLevelSubmission(ctx context.Context, id string) error {
+	var groupID, name, payload string
+	var approvedLevelNo int
+	if err := a.db.QueryRow(ctx, `SELECT group_id,name,payload,approved_level_no FROM level_submissions WHERE id=$1`, id).Scan(&groupID, &name, &payload, &approvedLevelNo); err != nil {
+		return err
+	}
+	if groupID == "" {
+		switch name {
+		case "抓小孩":
+			groupID = "night-watch"
+		case "胡说哥传奇":
+			groupID = "station"
+		}
+	}
+	if groupID != "" && approvedLevelNo > 0 {
+		if _, err := a.db.Exec(ctx, `DELETE FROM game_levels WHERE group_id=$1 AND level_no=$2`, groupID, approvedLevelNo); err != nil {
+			return err
+		}
+	} else if groupID != "" {
+		if err := a.deleteLevelByPayload(ctx, groupID, payload); err != nil {
+			return err
+		}
+	}
+	_, err := a.db.Exec(ctx, `DELETE FROM level_submissions WHERE id=$1`, id)
+	return err
+}
+
+func (a *app) deleteLevelByPayload(ctx context.Context, groupID, payload string) error {
+	messages, err := validateLevelPayload(payload)
+	if err != nil {
+		return err
+	}
+	levelMessages := make([]levelMessage, 0, len(messages))
+	for index, item := range messages {
+		levelMessages = append(levelMessages, levelMessage{SendID: item.NPCID, Text: item.Message, Reportable: groupID == "night-watch" && index == len(messages)-1})
+	}
+	messagesRaw, _ := json.Marshal(levelMessages)
+	_, err = a.db.Exec(ctx, `DELETE FROM game_levels WHERE group_id=$1 AND messages=$2::jsonb`, groupID, string(messagesRaw))
 	return err
 }
 
@@ -1061,7 +1145,7 @@ func (a *app) adminUser(w http.ResponseWriter, r *http.Request, in adminAuthRequ
 }
 
 func (a *app) adminListNPCs(ctx context.Context) ([]map[string]any, error) {
-	rows, err := a.db.Query(ctx, `SELECT public_id,name,tg_username,description,avatar_url,is_active,created_at FROM npcs ORDER BY public_id`)
+	rows, err := a.db.Query(ctx, `SELECT public_id,name,tg_username,description,avatar_url,is_active,created_at FROM npcs WHERE is_active ORDER BY public_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -1100,7 +1184,7 @@ func (a *app) adminListNPCApplications(ctx context.Context) ([]map[string]any, e
 }
 
 func (a *app) adminListLevelSubmissions(ctx context.Context) ([]map[string]any, error) {
-	rows, err := a.db.Query(ctx, `SELECT id,name,description,payload,status,match_label,match_score,created_at FROM level_submissions ORDER BY created_at DESC LIMIT 50`)
+	rows, err := a.db.Query(ctx, `SELECT id,name,description,payload,status,match_label,match_score,approved_level_no,created_at FROM level_submissions ORDER BY created_at DESC LIMIT 50`)
 	if err != nil {
 		return nil, err
 	}
@@ -1109,11 +1193,12 @@ func (a *app) adminListLevelSubmissions(ctx context.Context) ([]map[string]any, 
 	for rows.Next() {
 		var id, name, description, payload, status, matchLabel string
 		var matchScore float64
+		var approvedLevelNo int
 		var createdAt time.Time
-		if err := rows.Scan(&id, &name, &description, &payload, &status, &matchLabel, &matchScore, &createdAt); err != nil {
+		if err := rows.Scan(&id, &name, &description, &payload, &status, &matchLabel, &matchScore, &approvedLevelNo, &createdAt); err != nil {
 			return nil, err
 		}
-		items = append(items, map[string]any{"id": id, "name": name, "description": description, "payload": payload, "status": status, "match_label": matchLabel, "match_score": matchScore, "created_at": createdAt})
+		items = append(items, map[string]any{"id": id, "name": name, "description": description, "payload": payload, "status": status, "match_label": matchLabel, "match_score": matchScore, "approved_level_no": approvedLevelNo, "created_at": createdAt})
 	}
 	return items, rows.Err()
 }

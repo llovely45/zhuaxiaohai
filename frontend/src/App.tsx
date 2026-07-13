@@ -48,7 +48,7 @@ type AdminOverview = {
   counts: Record<string, number>;
   npcs: NPC[];
   npc_applications: Array<{ id: string; name: string; tg_username: string; description: string; status: string; match_label: string; match_score: number; created_at: string }>;
-  level_submissions: Array<{ id: string; name: string; description: string; payload: string; status: string; match_label: string; match_score: number; created_at: string }>;
+  level_submissions: Array<{ id: string; name: string; description: string; payload: string; status: string; match_label: string; match_score: number; approved_level_no: number; created_at: string }>;
   fingerprints: Array<{ tg_user_id: string; fingerprint_id: string; fingerprint: Record<string, unknown>; last_seen_at: string }>;
   fingerprint_labels: Array<{ id: string; label_name: string; fingerprint_id: string; fingerprint: Record<string, unknown>; rules: string[]; updated_at: string }>;
 };
@@ -754,6 +754,26 @@ export default function Home() {
     }
   };
 
+  const deleteAdminItem = async (type: "npc" | "level_submission", id: string | number) => {
+    if (!window.confirm("确认删除？")) return;
+    try {
+      const response = await fetch(`${API_URL}/api/v1/admin/delete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders },
+        body: JSON.stringify({ ...adminAuthPayload(), type, id: String(id) }),
+      });
+      if (!response.ok) throw new Error("delete failed");
+      await loadAdminOverview();
+      if (type === "npc") {
+        const data = await fetch(`${API_URL}/api/v1/npcs`, { headers: authHeaders }).then((res) => res.ok ? res.json() : null).catch(() => null) as { items?: NPC[] } | null;
+        if (data?.items) setNpcs(data.items);
+      }
+    } catch {
+      setAdminUnlocked(false);
+      setAdminOverview(null);
+    }
+  };
+
   const copyLevelPrompt = async (text: string) => {
     try {
       if (navigator.clipboard?.writeText) {
@@ -1173,7 +1193,15 @@ export default function Home() {
                       </div>
                       <div className="admin-section">
                         <h4>系统角色</h4>
-                        {adminOverview.npcs.slice(0, 12).map((npc) => <p key={npc.id}><b>#{npc.id} {npc.name}</b><small>{npc.tg_username || "无用户名"} · {npc.description}</small></p>)}
+                        {adminOverview.npcs.slice(0, 12).map((npc) => (
+                          <p key={npc.id}>
+                            <b>#{npc.id} {npc.name}</b>
+                            <small>{npc.tg_username || "无用户名"} · {npc.description}</small>
+                            <span className="review-actions">
+                              <button onClick={() => deleteAdminItem("npc", npc.id)}>删除</button>
+                            </span>
+                          </p>
+                        ))}
                       </div>
                       <div className="admin-section">
                         <h4>角色申请</h4>
@@ -1202,6 +1230,11 @@ export default function Home() {
                                 <button onClick={() => reviewApplication("level", item.id, "approve")}>同意</button>
                                 <button onClick={() => reviewApplication("level", item.id, "ignore")}>忽略</button>
                                 <button onClick={() => reviewApplication("level", item.id, "mark")}>标记</button>
+                              </span>
+                            )}
+                            {item.status === "approved" && (
+                              <span className="review-actions">
+                                <button onClick={() => deleteAdminItem("level_submission", item.id)}>删除</button>
                               </span>
                             )}
                           </p>
