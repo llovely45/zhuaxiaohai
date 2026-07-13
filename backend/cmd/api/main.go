@@ -538,20 +538,33 @@ func (a *app) levelSubmissionMeta(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var groupPrompt func(string) string
+	var fixedNPCID int64
 	switch groupID {
 	case "night-watch":
+		fixedNPCID = 9478
 		groupPrompt = func(npcIDs string) string {
-			return fmt.Sprintf("请根据这些NPC ID [%s，]生成“抓小孩”关卡数据。小孩哥的人设是：心智不成熟，满口胡话，实际上想要凑近乎白嫖代理节点。只输出JSON数组，格式必须为[{\"npc_id\":id,\"message\":\"发言内容\"},{\"npc_id\":id,\"message\":\"发言内容\"}]。npc_id必须来自给定列表，message不能为空字符串，至少2条消息。", npcIDs)
+			return fmt.Sprintf("请根据这些NPC ID [%s，]生成“抓小孩”关卡数据。必须固定使用 npc_id=9478，9478 就是小孩。小孩的人设是：心智不成熟，满口胡话，实际上想要凑近乎白嫖代理节点。只输出JSON数组，格式必须为[{\"npc_id\":id,\"message\":\"发言内容\"},{\"npc_id\":id,\"message\":\"发言内容\"}]。npc_id必须来自给定列表，message不能为空字符串，至少2条消息，并且至少包含1条 npc_id 为9478的小孩发言。", npcIDs)
 		}
 	case "station":
+		fixedNPCID = 9479
 		groupPrompt = func(npcIDs string) string {
-			return fmt.Sprintf("请根据这些NPC ID [%s，]生成“胡说哥传奇”关卡数据。胡说哥的人设是：满口胡话，假装高手，实际上不懂技术。只输出JSON数组，格式必须为[{\"npc_id\":id,\"message\":\"发言内容\"},{\"npc_id\":id,\"message\":\"发言内容\"}]。npc_id必须来自给定列表，message不能为空字符串，至少2条消息。", npcIDs)
+			return fmt.Sprintf("请根据这些NPC ID [%s，]生成“胡说哥传奇”关卡数据。必须固定使用 npc_id=9479，9479 就是胡说哥。胡说哥的人设是：满口胡话，假装高手，实际上不懂技术。只输出JSON数组，格式必须为[{\"npc_id\":id,\"message\":\"发言内容\"},{\"npc_id\":id,\"message\":\"发言内容\"}]。npc_id必须来自给定列表，message不能为空字符串，至少2条消息，并且至少包含1条 npc_id 为9479的胡说哥发言。", npcIDs)
 		}
 	default:
 		fail(w, 400, "unsupported group_id")
 		return
 	}
-	rows, err := a.db.Query(r.Context(), `SELECT public_id FROM npcs WHERE is_active ORDER BY random() LIMIT 10`)
+	rows, err := a.db.Query(r.Context(), `
+		SELECT public_id
+		FROM (
+		  SELECT public_id, 0 AS priority FROM npcs WHERE is_active AND public_id=$1
+		  UNION ALL
+		  SELECT public_id, 1 AS priority
+		  FROM (
+		    SELECT public_id FROM npcs WHERE is_active AND public_id<>$1 ORDER BY random() LIMIT 9
+		  ) random_npcs
+		) picked
+		ORDER BY priority, public_id`, fixedNPCID)
 	if err != nil {
 		serverError(w, err)
 		return
