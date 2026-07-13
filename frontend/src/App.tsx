@@ -322,6 +322,14 @@ export default function Home() {
     () => groups.find((group) => group.id === activeGroupId) ?? groups[0],
     [activeGroupId],
   );
+  const fingerprintLabelGroups = useMemo(() => {
+    const grouped = new Map<string, NonNullable<AdminOverview["fingerprint_labels"]>>();
+    for (const label of adminOverview?.fingerprint_labels ?? []) {
+      const key = label.label_name || "未命名";
+      grouped.set(key, [...(grouped.get(key) ?? []), label]);
+    }
+    return Array.from(grouped.entries()).map(([labelName, items]) => ({ labelName, items }));
+  }, [adminOverview]);
   const levelSubmitMessages: ChatMessage[] = useMemo(() => {
     if (!levelForm.group_id) return [
       { id: "level-select", sender: "关卡编辑器", avatar: "关", tone: "bot", isBot: true, text: "请选择关卡种类，选择后会生成对应的AI提示词。", time: "刚刚" },
@@ -1082,60 +1090,74 @@ export default function Home() {
                       <div className="admin-section fingerprint-admin">
                         <h4>标签</h4>
                         <label className="admin-label-input">标签<input value={adminLabelName} onChange={(event) => setAdminLabelName(event.target.value)} placeholder="例如：小孩" /></label>
-                        {adminOverview.fingerprint_labels.map((label) => (
-                          <article className="fingerprint-card" key={label.id}>
-                            <button className="fingerprint-title" onClick={() => setExpandedLabels((current) => ({ ...current, [label.id]: !current[label.id] }))}>
-                              <span>标签：{label.label_name}</span><b>{expandedLabels[label.id] ? "收起" : "展开"}</b>
-                            </button>
-                            {expandedLabels[label.id] && (
-                              <div className="fingerprint-detail">
-                                <p><b>规则数量</b><small>{label.rules.length} 个字段</small></p>
-                                {fingerprintFeatureRows.map((row) => {
-                                  const fieldKey = `${label.id}-${row.key}`;
-                                  const enabled = label.rules.includes(row.key);
-                                  return (
-                                    <div className="fingerprint-field" key={row.key}>
-                                      <button className="fingerprint-field-title" onClick={() => setExpandedFingerprintFields((current) => ({ ...current, [fieldKey]: !current[fieldKey] }))}>
-                                        <span>{row.label}</span><b>{enabled ? "已添加" : "未添加"} · {expandedFingerprintFields[fieldKey] ? "收起" : "展开"}</b>
-                                      </button>
-                                      {expandedFingerprintFields[fieldKey] && <small>{fingerprintFeatureValue(label.fingerprint, row.key)}</small>}
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            )}
-                          </article>
-                        ))}
-                        {adminOverview.fingerprints.slice(0, 8).map((item) => {
+                        {(() => {
                           const labelTitle = adminLabelName.trim() || "小孩";
-                          return (
-                          <article className="fingerprint-card" key={item.fingerprint_id}>
-                            <button className="fingerprint-title" onClick={() => setExpandedFingerprints((current) => ({ ...current, [item.fingerprint_id]: !current[item.fingerprint_id] }))}>
-                              <span>标签：{labelTitle}</span><b>{expandedFingerprints[item.fingerprint_id] ? "收起" : "展开"}</b>
+                          const visibleGroups = fingerprintLabelGroups.some((group) => group.labelName === labelTitle) || adminOverview.fingerprints.length === 0
+                            ? fingerprintLabelGroups
+                            : [...fingerprintLabelGroups, { labelName: labelTitle, items: [] }];
+                          return visibleGroups.map((group) => (
+                          <article className="fingerprint-card" key={group.labelName}>
+                            <button className="fingerprint-title" onClick={() => setExpandedLabels((current) => ({ ...current, [group.labelName]: !current[group.labelName] }))}>
+                              <span>{group.labelName}</span><b>{expandedLabels[group.labelName] ? "收起" : "展开"}</b>
                             </button>
-                            {expandedFingerprints[item.fingerprint_id] && (
+                            {expandedLabels[group.labelName] && (
                               <div className="fingerprint-detail">
-                                {fingerprintDisplayRows.map((row) => {
-                                  const fieldKey = `recent-${item.fingerprint_id}-${row.key}`;
-                                  return (
-                                    <div className="fingerprint-field" key={row.key}>
-                                      <button className="fingerprint-field-title" onClick={() => setExpandedFingerprintFields((current) => ({ ...current, [fieldKey]: !current[fieldKey] }))}>
-                                        <span>{row.label}</span><b>{expandedFingerprintFields[fieldKey] ? "收起" : "展开"}</b>
-                                      </button>
-                                      {expandedFingerprintFields[fieldKey] && (
-                                        <small>
-                                          {row.key === "tgid" ? (item.tg_user_id || "无") : fingerprintFeatureValue(item.fingerprint, row.key)}
-                                          {row.key !== "tgid" && <button onClick={() => addFingerprintRule(item.fingerprint_id, row.key)}>添加</button>}
-                                        </small>
-                                      )}
-                                    </div>
-                                  );
-                                })}
+                                {group.items.map((label, index) => (
+                                  <div className="fingerprint-field" key={label.id}>
+                                    <button className="fingerprint-field-title" onClick={() => setExpandedFingerprints((current) => ({ ...current, [label.id]: !current[label.id] }))}>
+                                      <span>样本 {index + 1}</span><b>{expandedFingerprints[label.id] ? "收起" : "展开"}</b>
+                                    </button>
+                                    {expandedFingerprints[label.id] && (
+                                      <div className="fingerprint-detail nested">
+                                        <p><b>规则数量</b><small>{label.rules.length} 个字段</small></p>
+                                        {fingerprintFeatureRows.map((row) => {
+                                          const fieldKey = `${label.id}-${row.key}`;
+                                          const enabled = label.rules.includes(row.key);
+                                          return (
+                                            <div className="fingerprint-field" key={row.key}>
+                                              <button className="fingerprint-field-title" onClick={() => setExpandedFingerprintFields((current) => ({ ...current, [fieldKey]: !current[fieldKey] }))}>
+                                                <span>{row.label}</span><b>{enabled ? "已添加" : "未添加"} · {expandedFingerprintFields[fieldKey] ? "收起" : "展开"}</b>
+                                              </button>
+                                              {expandedFingerprintFields[fieldKey] && <small>{fingerprintFeatureValue(label.fingerprint, row.key)}</small>}
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                                {group.labelName === labelTitle && adminOverview.fingerprints.slice(0, 8).map((item, index) => (
+                                  <div className="fingerprint-field" key={`recent-${item.fingerprint_id}`}>
+                                    <button className="fingerprint-field-title" onClick={() => setExpandedFingerprints((current) => ({ ...current, [item.fingerprint_id]: !current[item.fingerprint_id] }))}>
+                                      <span>待添加样本 {index + 1}</span><b>{expandedFingerprints[item.fingerprint_id] ? "收起" : "展开"}</b>
+                                    </button>
+                                    {expandedFingerprints[item.fingerprint_id] && (
+                                      <div className="fingerprint-detail nested">
+                                        {fingerprintDisplayRows.map((row) => {
+                                          const fieldKey = `recent-${item.fingerprint_id}-${row.key}`;
+                                          return (
+                                            <div className="fingerprint-field" key={row.key}>
+                                              <button className="fingerprint-field-title" onClick={() => setExpandedFingerprintFields((current) => ({ ...current, [fieldKey]: !current[fieldKey] }))}>
+                                                <span>{row.label}</span><b>{expandedFingerprintFields[fieldKey] ? "收起" : "展开"}</b>
+                                              </button>
+                                              {expandedFingerprintFields[fieldKey] && (
+                                                <small>
+                                                  {row.key === "tgid" ? (item.tg_user_id || "无") : fingerprintFeatureValue(item.fingerprint, row.key)}
+                                                  {row.key !== "tgid" && <button onClick={() => addFingerprintRule(item.fingerprint_id, row.key)}>添加</button>}
+                                                </small>
+                                              )}
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
                               </div>
                             )}
                           </article>
-                          );
-                        })}
+                          ));
+                        })()}
                       </div>
                     </>
                   )}
