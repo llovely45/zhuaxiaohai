@@ -49,6 +49,8 @@ type AdminOverview = {
   npcs: NPC[];
   npc_applications: Array<{ id: string; name: string; tg_username: string; description: string; status: string; created_at: string }>;
   level_submissions: Array<{ id: string; name: string; description: string; payload: string; status: string; created_at: string }>;
+  fingerprints: Array<{ tg_user_id: string; fingerprint_id: string; fingerprint: Record<string, unknown>; last_seen_at: string }>;
+  fingerprint_labels: Array<{ id: string; label_name: string; fingerprint_id: string; fingerprint: Record<string, unknown>; rules: string[]; updated_at: string }>;
 };
 type PreparedFingerprint = {
   fingerprint: Awaited<ReturnType<typeof collectRelayFingerprint>>;
@@ -96,9 +98,52 @@ const levelGroups = [
   { id: "night-watch", name: "抓小孩", description: "心智不成熟，满口胡话，想要凑近乎白嫖代理节点。" },
   { id: "station", name: "胡说哥传奇", description: "满口胡话，假装高手，实际上不懂技术。" },
 ];
+const fingerprintFeatureRows = [
+  { key: "ip", label: "IP" },
+  { key: "isp", label: "ISP" },
+  { key: "webrtc_ip", label: "webrtc ip" },
+  { key: "webrtc_isp", label: "webrtc isp" },
+  { key: "canvas", label: "canvas指纹" },
+  { key: "webgl", label: "webgl指纹" },
+  { key: "audio", label: "audio指纹" },
+  { key: "system", label: "系统" },
+  { key: "cpu", label: "cpu" },
+  { key: "screen", label: "screen" },
+  { key: "fonts", label: "fonts" },
+];
 
 function getTelegramWebApp(): TelegramWebApp | undefined {
   return (window as Window & { Telegram?: { WebApp?: TelegramWebApp } }).Telegram?.WebApp;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function shortText(value: unknown, fallback = "无") {
+  const text = typeof value === "string" ? value : JSON.stringify(value ?? "");
+  if (!text || text === "\"\"") return fallback;
+  return text.length > 80 ? `${text.slice(0, 80)}…` : text;
+}
+
+function fingerprintFeatureValue(fingerprint: Record<string, unknown>, key: string) {
+  const publicIp = asRecord(fingerprint.publicIpInfo);
+  const details = asRecord(fingerprint.details);
+  const webrtc = Array.isArray(fingerprint.webrtcIpInfos) ? fingerprint.webrtcIpInfos.map(asRecord) : [];
+  switch (key) {
+    case "ip": return shortText(publicIp.ip);
+    case "isp": return shortText(publicIp.organization);
+    case "webrtc_ip": return shortText(webrtc.map((item) => item.ip).filter(Boolean).join(", "));
+    case "webrtc_isp": return shortText(webrtc.map((item) => item.organization).filter(Boolean).join(", "));
+    case "canvas": return shortText(details.canvas);
+    case "webgl": return shortText(details.webgl);
+    case "audio": return shortText(details.audio);
+    case "system": return shortText(details.os);
+    case "cpu": return shortText(details.cpu);
+    case "screen": return shortText(details.screen);
+    case "fonts": return shortText(Array.isArray(details.fonts) ? details.fonts.join(", ") : details.fonts);
+    default: return "无";
+  }
 }
 
 function createLevelProfileMap(level: LevelScript) {
@@ -266,6 +311,9 @@ export default function Home() {
   const [adminUnlocked, setAdminUnlocked] = useState(false);
   const [adminOverview, setAdminOverview] = useState<AdminOverview | null>(null);
   const [adminLoading, setAdminLoading] = useState(false);
+  const [adminLabelName, setAdminLabelName] = useState("小孩");
+  const [expandedFingerprints, setExpandedFingerprints] = useState<Record<string, boolean>>({});
+  const [expandedLabels, setExpandedLabels] = useState<Record<string, boolean>>({});
   const [levelForm, setLevelForm] = useState({ group_id: "", payload: "" });
   const [formStatus, setFormStatus] = useState("");
 
@@ -612,6 +660,22 @@ export default function Home() {
     if (adminAvatarClicks.current >= 5) {
       adminAvatarClicks.current = 0;
       void requestAdminAccess();
+    }
+  };
+
+  const addFingerprintRule = async (targetFingerprintId: string, field: string) => {
+    const label = adminLabelName.trim() || "小孩";
+    try {
+      const response = await fetch(`${API_URL}/api/v1/admin/fingerprint-labels`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders },
+        body: JSON.stringify({ ...adminAuthPayload(), label_name: label, target_fingerprint_id: targetFingerprintId, field }),
+      });
+      if (!response.ok) throw new Error("failed");
+      await loadAdminOverview();
+    } catch {
+      setAdminUnlocked(false);
+      setAdminOverview(null);
     }
   };
 
@@ -1013,6 +1077,43 @@ export default function Home() {
                       <div className="admin-section">
                         <h4>关卡申请</h4>
                         {adminOverview.level_submissions.slice(0, 8).map((item) => <p key={item.id}><b>{item.name} · {item.status}</b><small>{item.payload}</small></p>)}
+                      </div>
+                      <div className="admin-section fingerprint-admin">
+                        <h4>指纹识别</h4>
+                        <label className="admin-label-input">标签<input value={adminLabelName} onChange={(event) => setAdminLabelName(event.target.value)} placeholder="例如：小孩" /></label>
+                        {adminOverview.fingerprint_labels.map((label) => (
+                          <article className="fingerprint-card" key={label.id}>
+                            <button className="fingerprint-title" onClick={() => setExpandedLabels((current) => ({ ...current, [label.id]: !current[label.id] }))}>
+                              <span>标签：{label.label_name}</span><b>{expandedLabels[label.id] ? "收起" : "展开"}</b>
+                            </button>
+                            {expandedLabels[label.id] && (
+                              <div className="fingerprint-detail">
+                                <p><b>ID</b><small>{label.fingerprint_id}</small></p>
+                                <p><b>规则</b><small>{label.rules.map((rule) => fingerprintFeatureRows.find((row) => row.key === rule)?.label ?? rule).join(", ") || "无"}</small></p>
+                                {fingerprintFeatureRows.map((row) => <p key={row.key}><b>{row.label}</b><small>{fingerprintFeatureValue(label.fingerprint, row.key)}</small></p>)}
+                              </div>
+                            )}
+                          </article>
+                        ))}
+                        {adminOverview.fingerprints.slice(0, 8).map((item) => (
+                          <article className="fingerprint-card" key={item.fingerprint_id}>
+                            <button className="fingerprint-title" onClick={() => setExpandedFingerprints((current) => ({ ...current, [item.fingerprint_id]: !current[item.fingerprint_id] }))}>
+                              <span>{item.fingerprint_id}</span><b>{expandedFingerprints[item.fingerprint_id] ? "收起" : "展开"}</b>
+                            </button>
+                            {expandedFingerprints[item.fingerprint_id] && (
+                              <div className="fingerprint-detail">
+                                <p><b>TG ID</b><small>{item.tg_user_id || "无"}</small></p>
+                                {fingerprintFeatureRows.map((row) => (
+                                  <p key={row.key}>
+                                    <b>{row.label}</b>
+                                    <small>{fingerprintFeatureValue(item.fingerprint, row.key)}</small>
+                                    <button onClick={() => addFingerprintRule(item.fingerprint_id, row.key)}>添加</button>
+                                  </p>
+                                ))}
+                              </div>
+                            )}
+                          </article>
+                        ))}
                       </div>
                     </>
                   )}

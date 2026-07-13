@@ -109,6 +109,7 @@ func main() {
 	mux.HandleFunc("POST /api/v1/level-submissions", a.createLevelSubmission)
 	mux.HandleFunc("POST /api/v1/admin/session", a.createAdminSession)
 	mux.HandleFunc("POST /api/v1/admin/overview", a.adminOverview)
+	mux.HandleFunc("POST /api/v1/admin/fingerprint-labels", a.adminCreateFingerprintLabel)
 
 	server := &http.Server{Addr: ":" + env("PORT", "8080"), Handler: a.middleware(mux), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
@@ -450,6 +451,13 @@ func (a *app) createNPCApplication(w http.ResponseWriter, r *http.Request) {
 		fail(w, 403, "不符合申请要求")
 		return
 	}
+	if matched, err := a.isFingerprintLabelMatched(r.Context(), pid); err != nil {
+		serverError(w, err)
+		return
+	} else if matched {
+		fail(w, 403, "不符合申请要求")
+		return
+	}
 
 	name := strings.TrimSpace(in.Name)
 	if name == "" {
@@ -617,6 +625,13 @@ func (a *app) createLevelSubmission(w http.ResponseWriter, r *http.Request) {
 		fail(w, 403, "不符合提交要求")
 		return
 	}
+	if matched, err := a.isFingerprintLabelMatched(r.Context(), pid); err != nil {
+		serverError(w, err)
+		return
+	} else if matched {
+		write(w, 201, map[string]string{"id": "", "status": "pending"})
+		return
+	}
 	rateKey := "level-submit:rate:" + pid
 	if count, err := a.redis.Incr(r.Context(), rateKey).Result(); err != nil {
 		serverError(w, err)
@@ -713,7 +728,73 @@ func (a *app) adminOverview(w http.ResponseWriter, r *http.Request) {
 		serverError(w, err)
 		return
 	}
-	write(w, 200, map[string]any{"counts": counts, "npcs": npcs, "npc_applications": npcApplications, "level_submissions": levelSubmissions})
+	fingerprints, err := a.adminListRecentFingerprints(r.Context())
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	fingerprintLabels, err := a.adminListFingerprintLabels(r.Context())
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	write(w, 200, map[string]any{"counts": counts, "npcs": npcs, "npc_applications": npcApplications, "level_submissions": levelSubmissions, "fingerprints": fingerprints, "fingerprint_labels": fingerprintLabels})
+}
+
+func (a *app) adminCreateFingerprintLabel(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		TGInitData    string `json:"tg_init_data"`
+		TGUsername    string `json:"tg_username"`
+		FingerprintID string `json:"fingerprint_id"`
+		MiniappID     string `json:"miniapp_id"`
+		LabelName     string `json:"label_name"`
+		TargetID      string `json:"target_fingerprint_id"`
+		Field         string `json:"field"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	if _, ok := a.adminUser(w, r, adminAuthRequest{TGInitData: in.TGInitData, TGUsername: in.TGUsername, FingerprintID: in.FingerprintID, MiniappID: in.MiniappID}); !ok {
+		return
+	}
+	labelName := strings.TrimSpace(in.LabelName)
+	fingerprintID := strings.TrimSpace(in.TargetID)
+	field := strings.TrimSpace(in.Field)
+	if labelName == "" || fingerprintID == "" || field == "" {
+		fail(w, 400, "label_name, target_fingerprint_id and field are required")
+		return
+	}
+	var payloadRaw []byte
+	if err := a.db.QueryRow(r.Context(), `SELECT fingerprint FROM players WHERE fingerprint_hash=$1 ORDER BY last_seen_at DESC LIMIT 1`, fingerprintID).Scan(&payloadRaw); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			fail(w, 404, "fingerprint not found")
+			return
+		}
+		serverError(w, err)
+		return
+	}
+	rules := []string{field}
+	var existingRaw []byte
+	if err := a.db.QueryRow(r.Context(), `SELECT rules FROM fingerprint_labels WHERE label_name=$1 AND fingerprint_id=$2`, labelName, fingerprintID).Scan(&existingRaw); err == nil {
+		_ = json.Unmarshal(existingRaw, &rules)
+		rules = appendUniqueString(rules, field)
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		serverError(w, err)
+		return
+	}
+	rulesRaw, _ := json.Marshal(rules)
+	_, err := a.db.Exec(r.Context(), `
+		INSERT INTO fingerprint_labels(label_name,fingerprint_id,fingerprint_payload,rules)
+		VALUES($1,$2,$3,$4)
+		ON CONFLICT(label_name,fingerprint_id) DO UPDATE SET
+		  fingerprint_payload=EXCLUDED.fingerprint_payload,
+		  rules=EXCLUDED.rules,
+		  updated_at=now()`, labelName, fingerprintID, payloadRaw, rulesRaw)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	write(w, 200, map[string]any{"ok": true, "label_name": labelName, "fingerprint_id": fingerprintID, "rules": rules})
 }
 
 type adminAuthRequest struct {
@@ -798,6 +879,50 @@ func (a *app) adminListLevelSubmissions(ctx context.Context) ([]map[string]any, 
 			return nil, err
 		}
 		items = append(items, map[string]any{"id": id, "name": name, "description": description, "payload": payload, "status": status, "created_at": createdAt})
+	}
+	return items, rows.Err()
+}
+
+func (a *app) adminListRecentFingerprints(ctx context.Context) ([]map[string]any, error) {
+	rows, err := a.db.Query(ctx, `SELECT COALESCE(tg_user_id,''),fingerprint_hash,fingerprint,last_seen_at FROM players ORDER BY last_seen_at DESC LIMIT 50`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]map[string]any, 0)
+	for rows.Next() {
+		var tgUserID, fingerprintID string
+		var payloadRaw []byte
+		var lastSeenAt time.Time
+		if err := rows.Scan(&tgUserID, &fingerprintID, &payloadRaw, &lastSeenAt); err != nil {
+			return nil, err
+		}
+		var payload map[string]any
+		_ = json.Unmarshal(payloadRaw, &payload)
+		items = append(items, map[string]any{"tg_user_id": tgUserID, "fingerprint_id": fingerprintID, "fingerprint": payload, "last_seen_at": lastSeenAt})
+	}
+	return items, rows.Err()
+}
+
+func (a *app) adminListFingerprintLabels(ctx context.Context) ([]map[string]any, error) {
+	rows, err := a.db.Query(ctx, `SELECT id,label_name,fingerprint_id,fingerprint_payload,rules,created_at,updated_at FROM fingerprint_labels ORDER BY updated_at DESC LIMIT 100`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]map[string]any, 0)
+	for rows.Next() {
+		var id, labelName, fingerprintID string
+		var payloadRaw, rulesRaw []byte
+		var createdAt, updatedAt time.Time
+		if err := rows.Scan(&id, &labelName, &fingerprintID, &payloadRaw, &rulesRaw, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		var payload map[string]any
+		var rules []string
+		_ = json.Unmarshal(payloadRaw, &payload)
+		_ = json.Unmarshal(rulesRaw, &rules)
+		items = append(items, map[string]any{"id": id, "label_name": labelName, "fingerprint_id": fingerprintID, "fingerprint": payload, "rules": rules, "created_at": createdAt, "updated_at": updatedAt})
 	}
 	return items, rows.Err()
 }
@@ -1060,6 +1185,187 @@ func (a *app) isIPBlacklisted(ctx context.Context, ip string) (bool, error) {
 	var blocked bool
 	err := a.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM ip_blacklist WHERE ip=$1)`, strings.TrimSpace(ip)).Scan(&blocked)
 	return blocked, err
+}
+
+func (a *app) isFingerprintLabelMatched(ctx context.Context, playerID string) (bool, error) {
+	var payloadRaw []byte
+	if err := a.db.QueryRow(ctx, `SELECT fingerprint FROM players WHERE id=$1`, playerID).Scan(&payloadRaw); err != nil {
+		return false, err
+	}
+	var current map[string]any
+	if err := json.Unmarshal(payloadRaw, &current); err != nil {
+		return false, err
+	}
+	rows, err := a.db.Query(ctx, `SELECT rules,fingerprint_payload FROM fingerprint_labels`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	threshold := fingerprintMatchThreshold()
+	for rows.Next() {
+		var rulesRaw, targetRaw []byte
+		if err := rows.Scan(&rulesRaw, &targetRaw); err != nil {
+			return false, err
+		}
+		var rules []string
+		var target map[string]any
+		_ = json.Unmarshal(rulesRaw, &rules)
+		_ = json.Unmarshal(targetRaw, &target)
+		if fingerprintSimilarity(current, target, rules) >= threshold {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+func fingerprintMatchThreshold() float64 {
+	raw := strings.TrimSpace(os.Getenv("FINGERPRINT_MATCH_THRESHOLD"))
+	if raw == "" {
+		return 0.6
+	}
+	var value float64
+	if _, err := fmt.Sscanf(raw, "%f", &value); err != nil || value <= 0 || value > 1 {
+		return 0.6
+	}
+	return value
+}
+
+func fingerprintSimilarity(current, target map[string]any, rules []string) float64 {
+	if len(rules) == 0 {
+		return 0
+	}
+	total, matched := 0, 0
+	for _, rule := range rules {
+		rule = strings.TrimSpace(rule)
+		if rule == "" {
+			continue
+		}
+		total++
+		if fingerprintRuleMatch(current, target, rule) {
+			matched++
+		}
+	}
+	if total == 0 {
+		return 0
+	}
+	return float64(matched) / float64(total)
+}
+
+func fingerprintRuleMatch(current, target map[string]any, rule string) bool {
+	switch rule {
+	case "ip":
+		return stringFeature(current, "publicIpInfo.ip") != "" && stringFeature(current, "publicIpInfo.ip") == stringFeature(target, "publicIpInfo.ip")
+	case "isp":
+		return stringFeature(current, "publicIpInfo.organization") != "" && stringFeature(current, "publicIpInfo.organization") == stringFeature(target, "publicIpInfo.organization")
+	case "webrtc_ip":
+		return intersects(stringSliceFeature(current, "webrtcIpInfos.ip"), stringSliceFeature(target, "webrtcIpInfos.ip"))
+	case "webrtc_isp":
+		return intersects(stringSliceFeature(current, "webrtcIpInfos.organization"), stringSliceFeature(target, "webrtcIpInfos.organization"))
+	case "canvas":
+		return stringFeature(current, "details.canvas") != "" && stringFeature(current, "details.canvas") == stringFeature(target, "details.canvas")
+	case "webgl":
+		return jsonFeature(current, "details.webgl") != "" && jsonFeature(current, "details.webgl") == jsonFeature(target, "details.webgl")
+	case "audio":
+		return stringFeature(current, "details.audio") != "" && stringFeature(current, "details.audio") == stringFeature(target, "details.audio")
+	case "system":
+		return stringFeature(current, "details.os") != "" && stringFeature(current, "details.os") == stringFeature(target, "details.os")
+	case "cpu":
+		return jsonFeature(current, "details.cpu") != "" && jsonFeature(current, "details.cpu") == jsonFeature(target, "details.cpu")
+	case "screen":
+		return jsonFeature(current, "details.screen") != "" && jsonFeature(current, "details.screen") == jsonFeature(target, "details.screen")
+	case "fonts":
+		return intersects(stringSliceFeature(current, "details.fonts"), stringSliceFeature(target, "details.fonts"))
+	default:
+		return false
+	}
+}
+
+func stringFeature(root map[string]any, path string) string {
+	value := nestedValue(root, strings.Split(path, "."))
+	return strings.TrimSpace(fmt.Sprint(value))
+}
+
+func jsonFeature(root map[string]any, path string) string {
+	value := stableValue(nestedValue(root, strings.Split(path, ".")))
+	if value == nil {
+		return ""
+	}
+	raw, _ := jsonNoHTMLEscape(value)
+	return string(raw)
+}
+
+func stringSliceFeature(root map[string]any, path string) []string {
+	parts := strings.Split(path, ".")
+	if len(parts) < 2 {
+		return nil
+	}
+	parent := nestedValue(root, parts[:len(parts)-1])
+	key := parts[len(parts)-1]
+	out := []string{}
+	switch value := parent.(type) {
+	case []any:
+		for _, item := range value {
+			if row, ok := item.(map[string]any); ok {
+				if text := strings.TrimSpace(fmt.Sprint(row[key])); text != "" {
+					out = append(out, text)
+				}
+			}
+		}
+	case []string:
+		for _, item := range value {
+			if trimmed := strings.TrimSpace(item); trimmed != "" {
+				out = append(out, trimmed)
+			}
+		}
+	case []map[string]string:
+		for _, item := range value {
+			if text := strings.TrimSpace(item[key]); text != "" {
+				out = append(out, text)
+			}
+		}
+	}
+	return out
+}
+
+func nestedValue(root any, parts []string) any {
+	current := root
+	for _, part := range parts {
+		row, ok := current.(map[string]any)
+		if !ok {
+			return nil
+		}
+		current = row[part]
+	}
+	return current
+}
+
+func intersects(a, b []string) bool {
+	seen := map[string]bool{}
+	for _, item := range a {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			seen[item] = true
+		}
+	}
+	for _, item := range b {
+		if seen[strings.TrimSpace(item)] {
+			return true
+		}
+	}
+	return false
+}
+
+func appendUniqueString(items []string, value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return items
+	}
+	for _, item := range items {
+		if item == value {
+			return items
+		}
+	}
+	return append(items, value)
 }
 
 func uniqueNPCName(ctx context.Context, db *pgxpool.Pool, name, tgUsername string) string {

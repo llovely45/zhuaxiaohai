@@ -66,12 +66,15 @@ REDIS_PASSWORD=请替换成另一个长随机密码
 TELEGRAM_BOT_TOKEN=从BotFather获取的Token
 REQUIRE_TELEGRAM_AUTH=true
 TURNSTILE_SECRET_KEY=Cloudflare Turnstile密钥
+FINGERPRINT_MATCH_THRESHOLD=0.6
 CORS_ORIGIN=https://zhuaxiaohai.pages.dev
 API_BIND=127.0.0.1
 API_PORT=30001
 ```
 
 后端默认只监听 `127.0.0.1:30001`，容器内部仍使用 `8080`。使用Nginx或Caddy反向代理到 `https://zxhapi.942040.xyz`，不要把PostgreSQL或Redis端口暴露到公网。
+
+`FINGERPRINT_MATCH_THRESHOLD` 是管理后台“指纹识别”标签的命中阈值，默认 `0.6`。NPC申请命中后直接返回“不符合申请要求”；关卡提交命中后不写入审核表，但仍返回提交成功。
 
 Caddy示例：
 
