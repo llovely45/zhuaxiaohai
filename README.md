@@ -140,8 +140,8 @@ X-Miniapp-ID: <verified_tg_user_id>
 - `GET /api/v1/levels?group_id=night-watch`：打开群聊时下发关卡脚本，返回 `level_no`、`npc_id`、`npc_photo` 和 `messages`。前端按 0-1 秒随机间隔逐条弹出消息。
 - `POST /api/v1/npc-applications`：提交时必须携带 `tg_init_data`、`fingerprint_id`、`miniapp_id`；后端使用 `TELEGRAM_BOT_TOKEN` 重新验签，只允许有 TG username 和头像、且不在黑名单中的用户写入系统 NPC。同 username 已存在时会使用申请时从 Telegram 凭证解析出的头像 URL 和备注替换旧数据。
 - `GET /api/v1/achievements`
-- `GET /api/v1/level-submissions/meta`：提交关卡页获取随机最多 10 个系统 NPC ID，以及可复制给 AI 的关卡 JSON 生成提示词。
-- `POST /api/v1/level-submissions`：提交关卡。提交审核表使用中间格式 `[{"npc_id":9478,"message":"..."}]`，后端会做 session token 绑定校验、防重放、短时间限频、指纹黑名单和 IP 黑名单检查。审核通过后再转成 `game_levels` 的正式关卡格式。
+- `GET /api/v1/level-submissions/meta?group_id=night-watch`：提交关卡页按关卡种类获取随机最多 10 个系统 NPC ID，并把 NPC ID 写入可复制给 AI 的关卡 JSON 生成提示词。
+- `POST /api/v1/level-submissions`：提交关卡。前端只传 `group_id` 和提交审核用的中间格式 `[{"npc_id":9478,"message":"..."}]`，后端会做 session token 绑定校验、防重放、短时间限频、指纹黑名单和 IP 黑名单检查。审核通过后再转成 `game_levels` 的正式关卡格式。
 
 完整定义见 [`backend/openapi.yaml`](backend/openapi.yaml)。
 

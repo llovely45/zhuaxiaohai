@@ -529,6 +529,21 @@ func (a *app) levelSubmissionMeta(w http.ResponseWriter, r *http.Request) {
 	if _, ok := a.playerID(w, r); !ok {
 		return
 	}
+	groupID := strings.TrimSpace(r.URL.Query().Get("group_id"))
+	if groupID == "" {
+		fail(w, 400, "group_id is required")
+		return
+	}
+	var groupGuide string
+	switch groupID {
+	case "night-watch":
+		groupGuide = "抓小孩分组：小孩哥心智不成熟，满口胡话，实际上想要凑近乎白嫖代理节点。"
+	case "station":
+		groupGuide = "胡说哥传奇分组：胡说哥满口胡话，假装高手，实际上不懂技术。"
+	default:
+		fail(w, 400, "unsupported group_id")
+		return
+	}
 	rows, err := a.db.Query(r.Context(), `SELECT public_id FROM npcs WHERE is_active ORDER BY random() LIMIT 10`)
 	if err != nil {
 		serverError(w, err)
@@ -548,8 +563,8 @@ func (a *app) levelSubmissionMeta(w http.ResponseWriter, r *http.Request) {
 	for _, id := range ids {
 		idParts = append(idParts, fmt.Sprintf("%d", id))
 	}
-	prompt := "请根据这些NPC ID生成关卡数据，只输出JSON数组，格式必须为[{\"npc_id\":id,\"message\":\"发言内容\"},{\"npc_id\":id,\"message\":\"发言内容\"}]。npc_id必须来自给定列表，message不能为空字符串，至少2条消息。"
-	write(w, 200, map[string]any{"npc_ids": ids, "npc_ids_text": strings.Join(idParts, ","), "editor_prompt": prompt})
+	prompt := fmt.Sprintf("%s 请根据这些NPC ID [%s，]生成关卡数据，只输出JSON数组，格式必须为[{\"npc_id\":id,\"message\":\"发言内容\"},{\"npc_id\":id,\"message\":\"发言内容\"}]。npc_id必须来自给定列表，message不能为空字符串，至少2条消息。", groupGuide, strings.Join(idParts, "，"))
+	write(w, 200, map[string]any{"group_id": groupID, "npc_ids": ids, "editor_prompt": prompt})
 }
 
 func (a *app) createLevelSubmission(w http.ResponseWriter, r *http.Request) {
@@ -557,15 +572,23 @@ func (a *app) createLevelSubmission(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var in struct{ Name, Description, Payload string }
+	var in struct{ GroupID, Name, Description, Payload string }
 	if !decode(w, r, &in) {
 		return
 	}
 	name := strings.TrimSpace(in.Name)
 	description := strings.TrimSpace(in.Description)
+	switch strings.TrimSpace(in.GroupID) {
+	case "night-watch":
+		name = "抓小孩"
+		description = "心智不成熟，满口胡话，实际上想要凑近乎白嫖代理节点。"
+	case "station":
+		name = "胡说哥传奇"
+		description = "满口胡话，假装高手，实际上不懂技术。"
+	}
 	payload := strings.TrimSpace(in.Payload)
 	if name == "" || description == "" || payload == "" {
-		fail(w, 400, "关卡名称、玩法说明和关卡数据不能为空")
+		fail(w, 400, "请选择关卡种类并填写关卡数据")
 		return
 	}
 	fingerprintID := strings.TrimSpace(r.Header.Get("X-Device-Fingerprint"))

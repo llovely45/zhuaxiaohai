@@ -43,7 +43,7 @@ type LevelScript = {
   npc_photo: Record<number, string>;
   messages: LevelScriptMessage[];
 };
-type LevelSubmissionMeta = { npc_ids: number[]; npc_ids_text: string; editor_prompt: string };
+type LevelSubmissionMeta = { group_id: string; npc_ids: number[]; editor_prompt: string };
 type PreparedFingerprint = {
   fingerprint: Awaited<ReturnType<typeof collectRelayFingerprint>>;
   webrtcIps: string[];
@@ -86,6 +86,10 @@ function randomNPCProfile() {
 }
 
 const fallbackLevelNos: Record<string, number> = { "night-watch": 10001, station: 30001 };
+const levelGroups = [
+  { id: "night-watch", name: "抓小孩", description: "心智不成熟，满口胡话，想要凑近乎白嫖代理节点。" },
+  { id: "station", name: "胡说哥传奇", description: "满口胡话，假装高手，实际上不懂技术。" },
+];
 
 function getTelegramWebApp(): TelegramWebApp | undefined {
   return (window as Window & { Telegram?: { WebApp?: TelegramWebApp } }).Telegram?.WebApp;
@@ -251,7 +255,7 @@ export default function Home() {
   const [achievements, setAchievements] = useState<Achievement[]>([]);
   const [npcForm, setNpcForm] = useState({ name: "", tg_username: "", description: "", avatar_url: "", extracted_data: {} as Record<string, unknown> });
   const [npcEditable, setNpcEditable] = useState(false);
-  const [levelForm, setLevelForm] = useState({ name: "", description: "", payload: "" });
+  const [levelForm, setLevelForm] = useState({ group_id: "", payload: "" });
   const [formStatus, setFormStatus] = useState("");
 
   const activeGroup = useMemo(
@@ -259,14 +263,16 @@ export default function Home() {
     [activeGroupId],
   );
   const levelSubmitMessages: ChatMessage[] = useMemo(() => {
+    if (!levelForm.group_id) return [
+      { id: "level-select", sender: "关卡编辑器", avatar: "关", tone: "bot", isBot: true, text: "请选择关卡种类，选择后会生成对应的AI提示词。", time: "刚刚" },
+    ];
     if (!levelSubmissionMeta) return [
-      { id: "level-loading", sender: "关卡编辑器", avatar: "关", tone: "bot", isBot: true, text: "正在获取可用NPC列表…", time: "刚刚" },
+      { id: "level-loading", sender: "关卡编辑器", avatar: "关", tone: "bot", isBot: true, text: "正在生成关卡提示词…", time: "刚刚" },
     ];
     return [
-      { id: "level-npcs", sender: "随机NPC发言", avatar: "随", tone: "mint", text: levelSubmissionMeta.npc_ids_text || "暂无可用NPC", time: "刚刚" },
       { id: "level-editor", sender: "关卡编辑器", avatar: "关", tone: "bot", isBot: true, text: levelSubmissionMeta.editor_prompt, time: "刚刚" },
     ];
-  }, [levelSubmissionMeta]);
+  }, [levelForm.group_id, levelSubmissionMeta]);
   const baseMessages = activeGroup.id === "level-submit" ? levelSubmitMessages : activeGroup.messages;
   const activeMessages = [...baseMessages, ...(addedMessages[activeGroup.id] ?? [])];
   const quotedMessage = activeMessages.find((message) => message.id === quotedId);
@@ -414,12 +420,13 @@ export default function Home() {
 
   useEffect(() => {
     if (activeGroupId !== "level-submit" || !playerId) return;
+    if (!levelForm.group_id) { setLevelSubmissionMeta(null); return; }
     setLevelSubmissionMeta(null);
-    fetch(`${API_URL}/api/v1/level-submissions/meta`, { headers: authHeaders })
+    fetch(`${API_URL}/api/v1/level-submissions/meta?group_id=${encodeURIComponent(levelForm.group_id)}`, { headers: authHeaders })
       .then((response) => response.ok ? response.json() : Promise.reject(new Error("meta failed")))
       .then((data: LevelSubmissionMeta) => setLevelSubmissionMeta(data))
-      .catch(() => setLevelSubmissionMeta({ npc_ids: [], npc_ids_text: "", editor_prompt: "请稍后重试。" }));
-  }, [activeGroupId, playerId, authHeaders]);
+      .catch(() => setLevelSubmissionMeta({ group_id: levelForm.group_id, npc_ids: [], editor_prompt: "请稍后重试。" }));
+  }, [activeGroupId, playerId, authHeaders, levelForm.group_id]);
 
   useEffect(() => {
     if (quotedId && !quotedMessage) setQuotedId(null);
@@ -555,14 +562,15 @@ export default function Home() {
   };
 
   const submitLevel = async () => {
-    if (!playerId || !levelForm.name.trim() || !levelForm.description.trim()) { setFormStatus("请填写关卡名称和玩法说明，并确认后端已连接"); return; }
+    if (!playerId || !levelForm.group_id) { setFormStatus("请先选择关卡种类"); return; }
     let normalizedPayload = "";
     try { normalizedPayload = validateLevelPayload(); } catch { normalizedPayload = ""; }
     if (!normalizedPayload) { setFormStatus("关卡数据格式不符合要求"); return; }
     try {
-      const response = await fetch(`${API_URL}/api/v1/level-submissions`, { method: "POST", headers: { "Content-Type": "application/json", ...authHeaders }, body: JSON.stringify({ ...levelForm, payload: normalizedPayload }) });
+      const response = await fetch(`${API_URL}/api/v1/level-submissions`, { method: "POST", headers: { "Content-Type": "application/json", ...authHeaders }, body: JSON.stringify({ group_id: levelForm.group_id, payload: normalizedPayload }) });
       if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error ?? "submit failed");
-      setLevelForm({ name: "", description: "", payload: "" });
+      setLevelForm({ group_id: "", payload: "" });
+      setLevelSubmissionMeta(null);
       setFormStatus("关卡已提交，等待审核");
     } catch (error) { setFormStatus(error instanceof Error ? error.message : "提交失败，请稍后重试"); }
   };
@@ -794,13 +802,6 @@ export default function Home() {
                 <div className="header-actions" aria-hidden="true"><span>⌕</span><span>⋯</span></div>
               </header>
 
-              {activeGroup.id === "night-watch" && !isBanned && (
-                <div className="mission-tip">
-                  <span>!</span>
-                  <p>找出反复索要代理节点并攻击群友的发言，点按引用后发送 <b>/spaw</b>。</p>
-                </div>
-              )}
-
               {activeGroup.id === "paper-club" && achievements.length > 0 && (
                 <div className="achievement-board">
                   {achievements.map((achievement) => (
@@ -842,8 +843,10 @@ export default function Home() {
 
               {activeGroup.id === "level-submit" && (
                 <div className="portal-form compact-form">
-                  <label>关卡名称<input value={levelForm.name} onChange={(event) => setLevelForm({ ...levelForm, name: event.target.value })} placeholder="例如：深夜求节点" /></label>
-                  <label>玩法说明<textarea value={levelForm.description} onChange={(event) => setLevelForm({ ...levelForm, description: event.target.value })} placeholder="玩家要找出哪条消息？如何通关？" /></label>
+                  <label>关卡种类<select value={levelForm.group_id} onChange={(event) => { setFormStatus(""); setLevelForm({ group_id: event.target.value, payload: "" }); }}>
+                    <option value="">请选择关卡种类</option>
+                    {levelGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+                  </select></label>
                   <label>关卡数据<textarea value={levelForm.payload} onChange={(event) => setLevelForm({ ...levelForm, payload: event.target.value })} placeholder='[{"npc_id":9478,"message":"有没有腾讯云节点"}]' /></label>
                   <button onClick={submitLevel}>提交关卡</button>
                   {formStatus && <p className="form-status">{formStatus}</p>}

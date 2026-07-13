@@ -83,9 +83,19 @@ paths:
       responses: { "200": { description: 成就列表 } }
   /level-submissions/meta:
     get:
-      summary: 获取提交关卡所需的随机NPC列表和AI提示词
+      summary: 按关卡种类获取提交关卡所需的随机NPC列表和AI提示词
       security: [{ bearerAuth: [], fingerprint: [], miniappId: [] }]
-      responses: { "200": { description: 返回随机NPC ID和编辑器提示词 } }
+      parameters:
+        - in: query
+          name: group_id
+          required: true
+          schema:
+            type: string
+            enum: [night-watch, station]
+          description: 关卡种类，night-watch=抓小孩，station=胡说哥传奇
+      responses:
+        "200": { description: 返回随机NPC ID和按关卡种类生成的编辑器提示词 }
+        "400": { description: 缺少或不支持的关卡种类 }
   /level-submissions:
     post:
       summary: 提交玩家关卡，服务端校验格式、防重放、限频和黑名单
@@ -96,10 +106,9 @@ paths:
           application/json:
             schema:
               type: object
-              required: [name, description, payload]
+              required: [group_id, payload]
               properties:
-                name: { type: string }
-                description: { type: string }
+                group_id: { type: string, enum: [night-watch, station], description: 关卡种类 }
                 payload: { type: string, description: 'JSON数组字符串，格式 [{"npc_id":9478,"message":"..."}]' }
       responses:
         "201": { description: 已提交 }
