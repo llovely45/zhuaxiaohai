@@ -534,12 +534,16 @@ func (a *app) levelSubmissionMeta(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "group_id is required")
 		return
 	}
-	var groupGuide string
+	var groupPrompt func(string) string
 	switch groupID {
 	case "night-watch":
-		groupGuide = "抓小孩分组：小孩哥心智不成熟，满口胡话，实际上想要凑近乎白嫖代理节点。"
+		groupPrompt = func(npcIDs string) string {
+			return fmt.Sprintf("请根据这些NPC ID [%s，]生成“抓小孩”关卡数据。小孩哥的人设是：心智不成熟，满口胡话，实际上想要凑近乎白嫖代理节点。只输出JSON数组，格式必须为[{\"npc_id\":id,\"message\":\"发言内容\"},{\"npc_id\":id,\"message\":\"发言内容\"}]。npc_id必须来自给定列表，message不能为空字符串，至少2条消息。", npcIDs)
+		}
 	case "station":
-		groupGuide = "胡说哥传奇分组：胡说哥满口胡话，假装高手，实际上不懂技术。"
+		groupPrompt = func(npcIDs string) string {
+			return fmt.Sprintf("请根据这些NPC ID [%s，]生成“胡说哥传奇”关卡数据。胡说哥的人设是：满口胡话，假装高手，实际上不懂技术。只输出JSON数组，格式必须为[{\"npc_id\":id,\"message\":\"发言内容\"},{\"npc_id\":id,\"message\":\"发言内容\"}]。npc_id必须来自给定列表，message不能为空字符串，至少2条消息。", npcIDs)
+		}
 	default:
 		fail(w, 400, "unsupported group_id")
 		return
@@ -563,7 +567,7 @@ func (a *app) levelSubmissionMeta(w http.ResponseWriter, r *http.Request) {
 	for _, id := range ids {
 		idParts = append(idParts, fmt.Sprintf("%d", id))
 	}
-	prompt := fmt.Sprintf("%s 请根据这些NPC ID [%s，]生成关卡数据，只输出JSON数组，格式必须为[{\"npc_id\":id,\"message\":\"发言内容\"},{\"npc_id\":id,\"message\":\"发言内容\"}]。npc_id必须来自给定列表，message不能为空字符串，至少2条消息。", groupGuide, strings.Join(idParts, "，"))
+	prompt := groupPrompt(strings.Join(idParts, "，"))
 	write(w, 200, map[string]any{"group_id": groupID, "npc_ids": ids, "editor_prompt": prompt})
 }
 
